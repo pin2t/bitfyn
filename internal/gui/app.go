@@ -26,7 +26,7 @@ type Options struct {
 func Run(opts Options) {
 	var a = app.NewWithID("bitfyn.wallet")
 	var w = a.NewWindow("BitFyn")
-	w.Resize(fyne.NewSize(420, 640))
+	w.Resize(fyne.NewSize(460, 700))
 	w.CenterOnScreen()
 	var ctrl, err = newGUI(opts, w)
 	if err != nil {

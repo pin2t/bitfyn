@@ -1,6 +1,7 @@
 package gui
 
 import "image"
+import "image/color"
 import "testing"
 
 // TestRoundedCellMask checks that a cell mask cuts only the very corner of a
@@ -28,5 +29,17 @@ func TestRoundedCellMaskSmall(t *testing.T) {
 		if a := m.AlphaAt(p.X, p.Y).A; a != 255 {
 			t.Errorf("alpha at %v = %d, want 255", p, a)
 		}
+	}
+}
+
+// TestQRColorsFallback checks the black-on-white defaults used when no Fyne
+// app is running, e.g. in unit tests or headless rendering.
+func TestQRColorsFallback(t *testing.T) {
+	var background, foreground = qrColors()
+	if background != color.White {
+		t.Errorf("background = %v, want white", background)
+	}
+	if foreground != color.Black {
+		t.Errorf("foreground = %v, want black", foreground)
 	}
 }
