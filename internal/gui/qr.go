@@ -17,7 +17,7 @@ const qrQuietZone = 0
 // qrCellPixels is the on-screen size of one QR module. The widget sizes
 // itself to fit all modules at this size, keeping the code compact so the
 // address text sits right under its bottom edge.
-const qrCellPixels = 11
+const qrCellPixels = 9
 
 // QRWidget renders the QR code of a text payload as a crisp,
 // resolution-independent raster that redraws at any widget size.

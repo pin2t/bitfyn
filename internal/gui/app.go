@@ -30,7 +30,7 @@ func Run(opts Options) {
 	var w = a.NewWindow("BitFyn")
 	w.Resize(fyne.NewSize(460, 700))
 	w.CenterOnScreen()
-	var ctrl, err = newGUI(opts, w)
+	var gui, err = newGUI(opts, w)
 	if err != nil {
 		log.Printf("startup failed: %v", err)
 		w.SetContent(container.NewVBox(
@@ -40,8 +40,8 @@ func Run(opts Options) {
 		w.ShowAndRun()
 		return
 	}
-	w.SetOnClosed(func() { _ = ctrl.store.Close() })
-	w.SetContent(ctrl.content())
+	w.SetOnClosed(func() { _ = gui.store.Close() })
+	w.SetContent(gui.content())
 	w.ShowAndRun()
 }
 
@@ -131,7 +131,7 @@ func (g *gui) content() fyne.CanvasObject {
 		nil, nil,
 		container.New(layout.NewCustomPaddedVBoxLayout(0),
 			container.NewCenter(g.qr),
-			container.NewCenter(container.New(layout.NewCustomPaddedHBoxLayout(0), g.addr, copyBtn)),
+			container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 		),
 	)
 }
