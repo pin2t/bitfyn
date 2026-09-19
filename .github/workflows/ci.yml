@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Build, vet, lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Fyne Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev
+      - name: Build
+        run: go build ./...
+      - name: Plain go vet
+        run: go vet ./...
+      - name: Install govets linters
+        run: go install github.com/pin2t/govets/imports-vet@v1.2.0 github.com/pin2t/govets/funcbody-vet@v1.2.0 github.com/pin2t/govets/vardecl-vet@v1.2.0 github.com/pin2t/govets/varname-vet@v1.2.0
+      - name: Lint with imports-vet
+        run: go vet -vettool="$(go env GOPATH)/bin/imports-vet" ./...
+      - name: Lint with funcbody-vet
+        run: go vet -vettool="$(go env GOPATH)/bin/funcbody-vet" ./...
+      - name: Lint with vardecl-vet
+        run: go vet -vettool="$(go env GOPATH)/bin/vardecl-vet" ./...
+      - name: Lint with varname-vet
+        run: go vet -vettool="$(go env GOPATH)/bin/varname-vet" ./...
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Test
+        run: go test ./...
