@@ -1,0 +1,15 @@
+# build and test caches are kept inside the workspace
+.gopath/
+.gocache/
+
+# build artifacts
+/spvbit
+*.db
+*.db-journal
+*.db-wal
+.idea/
+# check-mode output
+/address-qr.png
+
+# macOS
+.DS_Store
