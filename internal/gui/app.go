@@ -10,7 +10,6 @@ import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
-import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
@@ -110,9 +109,7 @@ func (g *gui) content() fyne.CanvasObject {
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
 	g.addr.Wrapping = fyne.TextWrapBreak
 	var copyBtn = widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
-		if g.addr.Text == "" {
-			return
-		}
+		if g.addr.Text == "" { return }
 		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
 		dialog.ShowInformation("Copied", "Address copied to clipboard", g.window)
 	})
@@ -129,7 +126,7 @@ func (g *gui) content() fyne.CanvasObject {
 		top,
 		nil,
 		nil, nil,
-		container.New(layout.NewCustomPaddedVBoxLayout(0),
+		container.NewVBox(
 			container.NewCenter(g.qr),
 			container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 		),
