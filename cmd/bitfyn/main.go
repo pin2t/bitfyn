@@ -16,8 +16,8 @@ import "bitfyn/internal/wallet"
 func main() {
 	var dataDir = flag.String("datadir", defaultDataDir(), "directory for the wallet database")
 	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
-	var dbPass = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
-	var check = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
+	var dbPass  = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
+	var check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
 	flag.Parse()
 	if *check {
 		if err := runCheck(*dataDir, *network, *dbPass); err != nil {
