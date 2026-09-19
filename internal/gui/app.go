@@ -27,7 +27,7 @@ func Run(opts Options) {
 	var w = a.NewWindow("BitFyn")
 	w.Resize(fyne.NewSize(420, 640))
 	w.CenterOnScreen()
-	var ctrl, err = newController(opts, w)
+	var ctrl, err = newGUI(opts, w)
 	if err != nil {
 		log.Printf("startup failed: %v", err)
 		w.SetContent(container.NewVBox(
@@ -42,8 +42,8 @@ func Run(opts Options) {
 	w.ShowAndRun()
 }
 
-// controller holds the UI state and the wallet/store backend.
-type controller struct {
+// gui holds the UI state and the wallet/store backend.
+type gui struct {
 	window fyne.Window
 	store  *storage.Store
 	wallet *wallet.Wallet
@@ -57,18 +57,14 @@ type controller struct {
 	status *widget.Label
 }
 
-// newController opens the database, creating the wallet on first run, and
+// newGUI opens the database, creating the wallet on first run, and
 // prepares the UI state.
-func newController(opts Options, w fyne.Window) (*controller, error) {
+func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	var net, err = wallet.ParamsForNetwork(opts.Network)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	store, err := storage.Open(filepath.Join(opts.DataDir, "bitfyn.db"), opts.DBPass)
-	if err != nil {
-		return nil, err
-	}
-	var fail = func(err error) (*controller, error) {
+	if err != nil { return nil, err }
+	var fail = func(err error) (*gui, error) {
 		_ = store.Close()
 		return nil, err
 	}
@@ -81,20 +77,14 @@ func newController(opts Options, w fyne.Window) (*controller, error) {
 			return fail(fmt.Errorf("generate mnemonic: %w", err))
 		}
 		wl, err = wallet.New(mnemonic, "", net)
-		if err != nil {
-			return fail(err)
-		}
+		if err != nil { return fail(err) }
 		xpub, err := wl.AccountXPub()
-		if err != nil {
-			return fail(err)
-		}
+		if err != nil { return fail(err) }
 		if err := store.SaveMeta(mnemonic, xpub, opts.Network, time.Now().Unix()); err != nil {
 			return fail(fmt.Errorf("save wallet: %w", err))
 		}
 		meta, err = store.Meta()
-		if err != nil {
-			return fail(err)
-		}
+		if err != nil { return fail(err) }
 	case err != nil:
 		return fail(err)
 	default:
@@ -102,11 +92,9 @@ func newController(opts Options, w fyne.Window) (*controller, error) {
 			return fail(fmt.Errorf("wallet database is for network %q, not %q", meta.Network, opts.Network))
 		}
 		wl, err = wallet.New(meta.Mnemonic, "", net)
-		if err != nil {
-			return fail(err)
-		}
+		if err != nil { return fail(err) }
 	}
-	return &controller{
+	return &gui{
 		window: w,
 		store:  store,
 		wallet: wl,
@@ -117,38 +105,38 @@ func newController(opts Options, w fyne.Window) (*controller, error) {
 
 // content builds the window layout: the address QR code in the centre,
 // the address text below it, and the action buttons.
-func (c *controller) content() fyne.CanvasObject {
-	c.qr = NewQRWidget("")
-	c.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	c.addr.Wrapping = fyne.TextWrapBreak
-	c.path = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	c.status = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
+func (g *gui) content() fyne.CanvasObject {
+	g.qr = NewQRWidget("")
+	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
+	g.addr.Wrapping = fyne.TextWrapBreak
+	g.path = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
+	g.status = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 	var copyBtn = widget.NewButton("Copy Address", func() {
-		if c.addr.Text == "" {
+		if g.addr.Text == "" {
 			return
 		}
-		fyne.CurrentApp().Clipboard().SetContent(c.addr.Text)
-		c.setStatus("address copied to clipboard")
+		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
+		g.setStatus("address copied to clipboard")
 	})
 	var nextBtn = widget.NewButton("New Address", func() {
-		if err := c.nextAddress(); err != nil {
-			c.setStatus(fmt.Sprintf("error: %v", err))
-			dialog.ShowError(err, c.window)
+		if err := g.nextAddress(); err != nil {
+			g.setStatus(fmt.Sprintf("error: %v", err))
+			dialog.ShowError(err, g.window)
 		}
 	})
 	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	var netLabel = widget.NewLabelWithStyle("network: "+c.net, fyne.TextAlignCenter, fyne.TextStyle{})
-	if err := c.refreshAddress(); err != nil {
-		c.setStatus(fmt.Sprintf("error: %v", err))
+	var netLabel = widget.NewLabelWithStyle("network: "+g.net, fyne.TextAlignCenter, fyne.TextStyle{})
+	if err := g.refreshAddress(); err != nil {
+		g.setStatus(fmt.Sprintf("error: %v", err))
 	}
 	return container.NewBorder(
 		container.NewVBox(title, netLabel),
-		c.status,
+		g.status,
 		nil, nil,
 		container.NewVBox(
-			container.NewCenter(c.qr),
-			c.addr,
-			c.path,
+			container.NewCenter(g.qr),
+			g.addr,
+			g.path,
 			container.NewCenter(container.NewHBox(copyBtn, nextBtn)),
 		),
 	)
@@ -156,55 +144,55 @@ func (c *controller) content() fyne.CanvasObject {
 
 // refreshAddress derives the current address and updates QR, labels and the
 // address table.
-func (c *controller) refreshAddress() error {
-	var address, path, pubkey, err = c.wallet.DeriveAddress(c.index)
+func (g *gui) refreshAddress() error {
+	var address, path, pubkey, err = g.wallet.DeriveAddress(g.index)
 	if err != nil {
-		return fmt.Errorf("derive address %d: %w", c.index, err)
+		return fmt.Errorf("derive address %d: %w", g.index, err)
 	}
-	if err := c.qr.SetContent(address); err != nil {
+	if err := g.qr.SetContent(address); err != nil {
 		return fmt.Errorf("encode QR: %w", err)
 	}
-	c.addr.SetText(address)
-	c.path.SetText(path)
-	if err := c.store.AddAddress(c.index, path, address, pubkey); err != nil {
+	g.addr.SetText(address)
+	g.path.SetText(path)
+	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
-	c.updateStatus()
+	g.updateStatus()
 	return nil
 }
 
 // nextAddress derives the next receive address, persists it and refreshes
 // the UI. The database is updated first so the on-disk state stays the
 // source of truth.
-func (c *controller) nextAddress() error {
-	var idx = c.index + 1
-	var address, path, pubkey, err = c.wallet.DeriveAddress(idx)
+func (g *gui) nextAddress() error {
+	var idx = g.index + 1
+	var address, path, pubkey, err = g.wallet.DeriveAddress(idx)
 	if err != nil {
 		return fmt.Errorf("derive address %d: %w", idx, err)
 	}
-	if err := c.store.AddAddress(idx, path, address, pubkey); err != nil {
+	if err := g.store.AddAddress(idx, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
-	if err := c.store.UpdateNextIndex(idx); err != nil {
+	if err := g.store.UpdateNextIndex(idx); err != nil {
 		return fmt.Errorf("update next index: %w", err)
 	}
-	c.index = idx
-	if err := c.qr.SetContent(address); err != nil {
+	g.index = idx
+	if err := g.qr.SetContent(address); err != nil {
 		return fmt.Errorf("encode QR: %w", err)
 	}
-	c.addr.SetText(address)
-	c.path.SetText(path)
-	c.updateStatus()
+	g.addr.SetText(address)
+	g.path.SetText(path)
+	g.updateStatus()
 	return nil
 }
 
-func (c *controller) setStatus(msg string) { c.status.SetText(msg) }
+func (g *gui) setStatus(msg string) { g.status.SetText(msg) }
 
-func (c *controller) updateStatus() {
-	var n, err = c.store.CountAddresses()
+func (g *gui) updateStatus() {
+	var n, err = g.store.CountAddresses()
 	if err != nil {
-		c.setStatus(fmt.Sprintf("error: %v", err))
+		g.setStatus(fmt.Sprintf("error: %v", err))
 		return
 	}
-	c.setStatus(fmt.Sprintf("%d address(es) generated", n))
+	g.setStatus(fmt.Sprintf("%d address(es) generated", n))
 }
