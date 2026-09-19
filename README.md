@@ -1,4 +1,5 @@
 # spvbit
+[![CI](https://github.com/pin2t/spvbit/actions/workflows/ci.yml/badge.svg)](https://github.com/pin2t/spvbit/actions/workflows/ci.yml)
 
 SPV Bitcoin wallet with a [Fyne](https://fyne.io) GUI, written in Go.
 
