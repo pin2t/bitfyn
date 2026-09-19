@@ -1,4 +1,4 @@
-// Command spvbit is an SPV Bitcoin wallet with a Fyne GUI.
+// Command bitfyn is an SPV Bitcoin wallet with a Fyne GUI.
 package main
 
 import "errors"
@@ -9,25 +9,15 @@ import "os"
 import "path/filepath"
 import "time"
 import "github.com/skip2/go-qrcode"
-import "spvbit/internal/gui"
-import "spvbit/internal/storage"
-import "spvbit/internal/wallet"
-
-func defaultDataDir() string {
-	var home, err = os.UserHomeDir()
-	if err != nil {
-		return ".spvbit"
-	}
-	return filepath.Join(home, ".spvbit")
-}
+import "bitfyn/internal/gui"
+import "bitfyn/internal/storage"
+import "bitfyn/internal/wallet"
 
 func main() {
-	var (
-		dataDir = flag.String("datadir", defaultDataDir(), "directory for the wallet database")
-		network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
-		dbPass  = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
-		check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
-	)
+	var dataDir = flag.String("datadir", defaultDataDir(), "directory for the wallet database")
+	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
+	var dbPass = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
+	var check = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
 	flag.Parse()
 	if *check {
 		if err := runCheck(*dataDir, *network, *dbPass); err != nil {
@@ -35,11 +25,15 @@ func main() {
 		}
 		return
 	}
-	gui.Run(gui.Options{
-		DataDir: *dataDir,
-		Network: *network,
-		DBPass:  *dbPass,
-	})
+	gui.Run(gui.Options{DataDir: *dataDir, Network: *network, DBPass: *dbPass})
+}
+
+func defaultDataDir() string {
+	var home, err = os.UserHomeDir()
+	if err != nil {
+		return ".bitfyn"
+	}
+	return filepath.Join(home, ".bitfyn")
 }
 
 // runCheck exercises the full non-GUI pipeline: database, HD wallet, address
@@ -49,7 +43,7 @@ func runCheck(dataDir, network, dbPass string) error {
 	if err != nil {
 		return err
 	}
-	store, err := storage.Open(filepath.Join(dataDir, "spvbit.db"), dbPass)
+	store, err := storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
 	if err != nil {
 		return err
 	}

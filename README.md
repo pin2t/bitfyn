@@ -1,5 +1,5 @@
-# spvbit
-[![CI](https://github.com/pin2t/spvbit/actions/workflows/ci.yml/badge.svg)](https://github.com/pin2t/spvbit/actions/workflows/ci.yml)
+# bitfyn
+[![CI](https://github.com/pin2t/bitfyn/actions/workflows/ci.yml/badge.svg)](https://github.com/pin2t/bitfyn/actions/workflows/ci.yml)
 
 SPV Bitcoin wallet with a [Fyne](https://fyne.io) GUI, written in Go.
 
@@ -16,7 +16,7 @@ Current milestone: wallet bootstrap —
 ## Build
 
 ```sh
-go build -o spvbit ./cmd/spvbit
+go build -o bitfyn ./cmd/bitfyn
 ```
 
 Requires Go with cgo enabled and a C toolchain (Xcode CLT on macOS).
@@ -26,17 +26,17 @@ so no system SQLCipher/OpenSSL is needed.
 ## Run
 
 ```sh
-./spvbit -net testnet                       # GUI, default datadir ~/.spvbit
-./spvbit -datadir ./data -net mainnet       # custom datadir
-./spvbit -dbpass 'your-passphrase'          # encrypted wallet database
-./spvbit -check                             # headless smoke check, prints address + writes QR png
+./bitfyn -net testnet                       # GUI, default datadir ~/.bitfyn
+./bitfyn -datadir ./data -net mainnet       # custom datadir
+./bitfyn -dbpass 'your-passphrase'          # encrypted wallet database
+./bitfyn -check                             # headless smoke check, prints address + writes QR png
 ```
 
 Flags:
 
 | flag       | default      | meaning                                          |
 |------------|--------------|--------------------------------------------------|
-| `-datadir` | `~/.spvbit`  | directory holding `spvbit.db`                    |
+| `-datadir` | `~/.bitfyn`  | directory holding `bitfyn.db`                    |
 | `-net`     | `mainnet`    | `mainnet`, `testnet`, `regtest` or `simnet`      |
 | `-dbpass`  | *(empty)*    | SQLCipher passphrase; empty = unencrypted DB     |
 | `-check`   | `false`      | init wallet, print address, exit (no GUI)        |
@@ -56,7 +56,7 @@ Flags:
 ## Layout
 
 ```
-cmd/spvbit/main.go     CLI flags, headless -check mode
+cmd/bitfyn/main.go     CLI flags, headless -check mode
 internal/wallet        BIP39/BIP84 HD derivation, P2WPKH addresses
 internal/storage       SQLCipher SQLite store (meta + addresses)
 internal/gui           Fyne window, QR widget, address display

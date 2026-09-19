@@ -18,7 +18,7 @@ import "github.com/btcsuite/btcd/btcutil/base58"
 import "github.com/btcsuite/btcd/btcutil/hdkeychain"
 import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/tyler-smith/go-bip39"
-import "spvbit/internal/wallet"
+import "bitfyn/internal/wallet"
 
 // The official BIP84 test vector mnemonic (mainnet).
 const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
