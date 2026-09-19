@@ -9,9 +9,15 @@ import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/skip2/go-qrcode"
 
-// qrQuietZone is the number of blank modules around the QR symbol. The slim
-// display margin keeps the modules as large as possible on screen.
-const qrQuietZone = 2
+// qrQuietZone is the number of blank modules between the symbol and the
+// widget edge. A single-module margin keeps the code close to the address
+// text below it.
+const qrQuietZone = 1
+
+// qrCellPixels is the on-screen size of one QR module. The widget sizes
+// itself to fit all modules at this size plus the slim quiet zone, so the
+// cell size stays fixed while the margins shrink.
+const qrCellPixels = 13
 
 // QRWidget renders the QR code of a text payload as a crisp,
 // resolution-independent raster that redraws at any widget size.
@@ -117,7 +123,10 @@ type qrRenderer struct {
 }
 
 func (r *qrRenderer) Layout(size fyne.Size) { r.raster.Resize(size) }
-func (r *qrRenderer) MinSize() fyne.Size    { return fyne.NewSquareSize(430) }
+func (r *qrRenderer) MinSize() fyne.Size {
+	var total = len(r.widget.modules) + 2*qrQuietZone
+	return fyne.NewSquareSize(float32(total * qrCellPixels))
+}
 func (r *qrRenderer) Refresh()              { canvas.Refresh(r.raster) }
 func (r *qrRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.raster}
