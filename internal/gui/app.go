@@ -49,9 +49,7 @@ type gui struct {
 	store  *storage.Store
 	wallet *wallet.Wallet
 	net    string
-
 	index uint32
-
 	qr   *QRWidget
 	addr *widget.Label
 }
