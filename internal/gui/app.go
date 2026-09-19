@@ -23,7 +23,7 @@ type Options struct {
 
 // Run starts the Fyne application and blocks until the window is closed.
 func Run(opts Options) {
-	var a = app.NewWithID("io.bitfyn.wallet")
+	var a = app.NewWithID("bitfyn.wallet")
 	var w = a.NewWindow("BitFyn")
 	w.Resize(fyne.NewSize(420, 640))
 	w.CenterOnScreen()

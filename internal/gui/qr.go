@@ -29,9 +29,7 @@ func NewQRWidget(content string) *QRWidget {
 // SetContent replaces the encoded payload and refreshes the widget.
 func (q *QRWidget) SetContent(content string) error {
 	var code, err = qrcode.New(content, qrcode.Medium)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	q.modules = code.Bitmap()
 	q.Refresh()
 	return nil
@@ -50,23 +48,16 @@ func (q *QRWidget) generate(w, h int) image.Image {
 	var img = image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
 	var n = len(q.modules)
-	if n == 0 || w == 0 || h == 0 {
-		return img
-	}
+	if n == 0 || w == 0 || h == 0 { return img }
 	var total = n + 2*qrQuietZone
 	var scale = min(w, h)
-	var cell = scale / total
-	if cell < 1 {
-		cell = 1
-	}
+	var cell = max(scale / total, 1)
 	var ox = (w - total*cell) / 2
 	var oy = (h - total*cell) / 2
 	var black = image.NewUniform(color.RGBA{R: 0, G: 0, B: 0, A: 255})
 	for y, row := range q.modules {
 		for x, on := range row {
-			if !on {
-				continue
-			}
+			if !on { continue }
 			var r = image.Rect(
 				ox+(x+qrQuietZone)*cell, oy+(y+qrQuietZone)*cell,
 				ox+(x+qrQuietZone+1)*cell, oy+(y+qrQuietZone+1)*cell,
