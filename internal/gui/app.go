@@ -11,8 +11,8 @@ import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
 import "fyne.io/fyne/v2/widget"
-import "spvbit/internal/storage"
-import "spvbit/internal/wallet"
+import "bitfyn/internal/storage"
+import "bitfyn/internal/wallet"
 
 // Options configures the GUI.
 type Options struct {
@@ -23,15 +23,15 @@ type Options struct {
 
 // Run starts the Fyne application and blocks until the window is closed.
 func Run(opts Options) {
-	var a = app.NewWithID("io.spvbit.wallet")
-	var w = a.NewWindow("SPVBit")
+	var a = app.NewWithID("io.bitfyn.wallet")
+	var w = a.NewWindow("BitFyn")
 	w.Resize(fyne.NewSize(420, 640))
 	w.CenterOnScreen()
 	var ctrl, err = newController(opts, w)
 	if err != nil {
 		log.Printf("startup failed: %v", err)
 		w.SetContent(container.NewVBox(
-			widget.NewLabelWithStyle("SPVBit failed to start", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+			widget.NewLabelWithStyle("BitFyn failed to start", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 			widget.NewLabelWithStyle(err.Error(), fyne.TextAlignCenter, fyne.TextStyle{Monospace: true}),
 		))
 		w.ShowAndRun()
@@ -64,7 +64,7 @@ func newController(opts Options, w fyne.Window) (*controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := storage.Open(filepath.Join(opts.DataDir, "spvbit.db"), opts.DBPass)
+	store, err := storage.Open(filepath.Join(opts.DataDir, "bitfyn.db"), opts.DBPass)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (c *controller) content() fyne.CanvasObject {
 			dialog.ShowError(err, c.window)
 		}
 	})
-	var title = widget.NewLabelWithStyle("SPVBit", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	var netLabel = widget.NewLabelWithStyle("network: "+c.net, fyne.TextAlignCenter, fyne.TextStyle{})
 	if err := c.refreshAddress(); err != nil {
 		c.setStatus(fmt.Sprintf("error: %v", err))

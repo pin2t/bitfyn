@@ -3,7 +3,7 @@
 .gocache/
 
 # build artifacts
-/spvbit
+/bitfyn
 *.db
 *.db-journal
 *.db-wal

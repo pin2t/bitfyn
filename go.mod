@@ -1,4 +1,4 @@
-module spvbit
+module bitfyn
 
 go 1.25.6
 
