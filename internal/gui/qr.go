@@ -55,6 +55,7 @@ func (q *QRWidget) generate(w, h int) image.Image {
 	var ox = (w - total*cell) / 2
 	var oy = (h - total*cell) / 2
 	var black = image.NewUniform(color.RGBA{R: 0, G: 0, B: 0, A: 255})
+	var mask = roundedCellMask(cell)
 	for y, row := range q.modules {
 		for x, on := range row {
 			if !on { continue }
@@ -62,10 +63,35 @@ func (q *QRWidget) generate(w, h int) image.Image {
 				ox+(x+qrQuietZone)*cell, oy+(y+qrQuietZone)*cell,
 				ox+(x+qrQuietZone+1)*cell, oy+(y+qrQuietZone+1)*cell,
 			)
-			draw.Draw(img, r, black, image.Point{}, draw.Src)
+			draw.DrawMask(img, r, black, image.Point{}, mask, image.Point{}, draw.Over)
 		}
 	}
 	return img
+}
+
+// roundedCellMask builds an alpha mask for a single QR cell whose corners are
+// slightly rounded, so the modules render as softened squares.
+func roundedCellMask(cell int) *image.Alpha {
+	var mask = image.NewAlpha(image.Rect(0, 0, cell, cell))
+	var r = cell / 4
+	if r <= 0 {
+		// The cells are too small to round; fill the whole square.
+		draw.Draw(mask, mask.Bounds(), image.White, image.Point{}, draw.Src)
+		return mask
+	}
+	var last = cell - 1
+	for y := 0; y < cell; y++ {
+		for x := 0; x < cell; x++ {
+			// Distance from the nearest corner centre; outside the
+			// corner circles the cell stays fully opaque.
+			var dx = max(r-x, x-(last-r))
+			var dy = max(r-y, y-(last-r))
+			if dx <= 0 || dy <= 0 || dx*dx+dy*dy <= r*r {
+				mask.SetAlpha(x, y, color.Alpha{A: 255})
+			}
+		}
+	}
+	return mask
 }
 
 type qrRenderer struct {
@@ -74,7 +100,7 @@ type qrRenderer struct {
 }
 
 func (r *qrRenderer) Layout(size fyne.Size) { r.raster.Resize(size) }
-func (r *qrRenderer) MinSize() fyne.Size    { return fyne.NewSquareSize(256) }
+func (r *qrRenderer) MinSize() fyne.Size    { return fyne.NewSquareSize(340) }
 func (r *qrRenderer) Refresh()              { canvas.Refresh(r.raster) }
 func (r *qrRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.raster}
