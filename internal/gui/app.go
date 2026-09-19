@@ -11,6 +11,7 @@ import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
 import "fyne.io/fyne/v2/widget"
+import "github.com/btcsuite/btcd/chaincfg"
 import "bitfyn/internal/storage"
 import "bitfyn/internal/wallet"
 
@@ -25,7 +26,7 @@ type Options struct {
 func Run(opts Options) {
 	var a = app.NewWithID("bitfyn.wallet")
 	var w = a.NewWindow("BitFyn")
-	w.Resize(fyne.NewSize(420, 640))
+	w.Resize(fyne.NewSize(460, 700))
 	w.CenterOnScreen()
 	var ctrl, err = newGUI(opts, w)
 	if err != nil {
@@ -51,10 +52,8 @@ type gui struct {
 
 	index uint32
 
-	qr     *QRWidget
-	addr   *widget.Label
-	path   *widget.Label
-	status *widget.Label
+	qr   *QRWidget
+	addr *widget.Label
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -103,40 +102,39 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	}, nil
 }
 
-// content builds the window layout: the address QR code in the centre,
-// the address text below it, and the action buttons.
+// content builds the window layout: the address QR code in the centre, the
+// address text below it, and the action buttons.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
 	g.addr.Wrapping = fyne.TextWrapBreak
-	g.path = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	g.status = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 	var copyBtn = widget.NewButton("Copy Address", func() {
 		if g.addr.Text == "" {
 			return
 		}
 		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
-		g.setStatus("address copied to clipboard")
+		dialog.ShowInformation("Copied", "Address copied to clipboard", g.window)
 	})
 	var nextBtn = widget.NewButton("New Address", func() {
 		if err := g.nextAddress(); err != nil {
-			g.setStatus(fmt.Sprintf("error: %v", err))
 			dialog.ShowError(err, g.window)
 		}
 	})
 	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	var netLabel = widget.NewLabelWithStyle("network: "+g.net, fyne.TextAlignCenter, fyne.TextStyle{})
+	var top = container.NewVBox(title)
+	if g.wallet.Net().Net != chaincfg.MainNetParams.Net {
+		top.Add(widget.NewLabelWithStyle("net: "+g.net, fyne.TextAlignCenter, fyne.TextStyle{}))
+	}
 	if err := g.refreshAddress(); err != nil {
-		g.setStatus(fmt.Sprintf("error: %v", err))
+		dialog.ShowError(err, g.window)
 	}
 	return container.NewBorder(
-		container.NewVBox(title, netLabel),
-		g.status,
+		top,
+		nil,
 		nil, nil,
 		container.NewVBox(
 			container.NewCenter(g.qr),
 			g.addr,
-			g.path,
 			container.NewCenter(container.NewHBox(copyBtn, nextBtn)),
 		),
 	)
@@ -153,11 +151,9 @@ func (g *gui) refreshAddress() error {
 		return fmt.Errorf("encode QR: %w", err)
 	}
 	g.addr.SetText(address)
-	g.path.SetText(path)
 	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
-	g.updateStatus()
 	return nil
 }
 
@@ -181,18 +177,5 @@ func (g *gui) nextAddress() error {
 		return fmt.Errorf("encode QR: %w", err)
 	}
 	g.addr.SetText(address)
-	g.path.SetText(path)
-	g.updateStatus()
 	return nil
-}
-
-func (g *gui) setStatus(msg string) { g.status.SetText(msg) }
-
-func (g *gui) updateStatus() {
-	var n, err = g.store.CountAddresses()
-	if err != nil {
-		g.setStatus(fmt.Sprintf("error: %v", err))
-		return
-	}
-	g.setStatus(fmt.Sprintf("%d address(es) generated", n))
 }
