@@ -69,17 +69,11 @@ func (w *Wallet) Net() *chaincfg.Params { return w.net }
 // It is encoded with the SLIP-132 zpub/vpub version bytes for BIP84.
 func (w *Wallet) AccountXPub() (string, error) {
 	var key, err = w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0)})
-	if err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
 	neutered, err := key.Neuter()
-	if err != nil {
-		return "", fmt.Errorf("neuter account key: %w", err)
-	}
+	if err != nil { return "", fmt.Errorf("neuter account key: %w", err) }
 	xpub, err := toSLIP132(neutered.String())
-	if err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
 	return xpub, nil
 }
 
@@ -89,9 +83,7 @@ func (w *Wallet) AccountXPub() (string, error) {
 func (w *Wallet) DeriveAddress(index uint32) (address, path string, pubkey []byte, err error) {
 	path = fmt.Sprintf("m/%d'/%d'/%d'/%d/%d", Purpose, w.coin, 0, 0, index)
 	key, err := w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0), 0, index})
-	if err != nil {
-		return "", "", nil, err
-	}
+	if err != nil { return "", "", nil, err }
 	pub, err := key.ECPubKey()
 	if err != nil {
 		return "", "", nil, fmt.Errorf("public key: %w", err)
@@ -159,9 +151,7 @@ func toSLIP132(xpub string) (string, error) {
 // checksum is the 4-byte double-SHA256 base58check checksum.
 func checksum(parts ...[]byte) []byte {
 	var h = sha256.New()
-	for _, p := range parts {
-		h.Write(p)
-	}
+	for _, p := range parts { h.Write(p) }
 	var first = h.Sum(nil)
 	var h2 = sha256.Sum256(first)
 	return h2[:4]
@@ -170,24 +160,17 @@ func checksum(parts ...[]byte) []byte {
 // coinType returns the BIP44/BIP84 coin type for a network: 0' for mainnet,
 // 1' for the test networks.
 func coinType(net *chaincfg.Params) uint32 {
-	if net.Net == chaincfg.MainNetParams.Net {
-		return 0
-	}
+	if net.Net == chaincfg.MainNetParams.Net { return 0 }
 	return 1
 }
 
 // ParamsForNetwork maps a user-facing network name to chain parameters.
 func ParamsForNetwork(network string) (*chaincfg.Params, error) {
 	switch strings.ToLower(strings.TrimSpace(network)) {
-	case "mainnet", "bitcoin":
-		return &chaincfg.MainNetParams, nil
-	case "testnet", "testnet3":
-		return &chaincfg.TestNet3Params, nil
-	case "regtest":
-		return &chaincfg.RegressionNetParams, nil
-	case "simnet":
-		return &chaincfg.SimNetParams, nil
-	default:
-		return nil, fmt.Errorf("unknown network %q (want mainnet, testnet, regtest or simnet)", network)
+	case "mainnet", "bitcoin":  return &chaincfg.MainNetParams, nil
+	case "testnet", "testnet3": return &chaincfg.TestNet3Params, nil
+	case "regtest":             return &chaincfg.RegressionNetParams, nil
+	case "simnet":              return &chaincfg.SimNetParams, nil
+	default:               		return nil, fmt.Errorf("unknown network %q (want mainnet, testnet, regtest or simnet)", network)
 	}
 }
