@@ -30,9 +30,7 @@ func main() {
 
 func defaultDataDir() string {
 	var home, err = os.UserHomeDir()
-	if err != nil {
-		return ".bitfyn"
-	}
+	if err != nil { return ".bitfyn" }
 	return filepath.Join(home, ".bitfyn")
 }
 
@@ -40,37 +38,25 @@ func defaultDataDir() string {
 // derivation and QR rendering. Useful for CI and quick smoke tests.
 func runCheck(dataDir, network, dbPass string) error {
 	var net, err = wallet.ParamsForNetwork(network)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	store, err := storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	defer store.Close()
 	meta, err := store.Meta()
 	var w *wallet.Wallet
 	switch {
 	case errors.Is(err, storage.ErrNoWallet):
 		var mnemonic, err = wallet.NewMnemonic(128)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		w, err = wallet.New(mnemonic, "", net)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		xpub, err := w.AccountXPub()
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		if err := store.SaveMeta(mnemonic, xpub, network, time.Now().Unix()); err != nil {
 			return err
 		}
 		meta, err = store.Meta()
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		fmt.Println("created new wallet")
 	case err != nil:
 		return err
@@ -79,14 +65,10 @@ func runCheck(dataDir, network, dbPass string) error {
 			return fmt.Errorf("wallet database is for network %q, requested %q", meta.Network, network)
 		}
 		w, err = wallet.New(meta.Mnemonic, "", net)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 	}
 	addr, path, pub, err := w.DeriveAddress(meta.NextIndex)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	if err := store.AddAddress(meta.NextIndex, path, addr, pub); err != nil {
 		return err
 	}
