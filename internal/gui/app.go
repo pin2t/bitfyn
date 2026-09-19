@@ -10,6 +10,7 @@ import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
+import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
@@ -101,10 +102,9 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	}, nil
 }
 
-// content builds the window layout: the address QR code in the centre, the
-// address text below it, and the action buttons.
 // content builds the window layout: the address QR code in the centre and
-// the address text below it with a clipboard copy icon to its right.
+// the address text right below it with a clipboard copy icon directly after
+// the text.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -129,9 +129,9 @@ func (g *gui) content() fyne.CanvasObject {
 		top,
 		nil,
 		nil, nil,
-		container.NewVBox(
+		container.New(layout.NewCustomPaddedVBoxLayout(0),
 			container.NewCenter(g.qr),
-			container.NewBorder(nil, nil, nil, copyBtn, g.addr),
+			container.NewCenter(container.New(layout.NewCustomPaddedHBoxLayout(0), g.addr, copyBtn)),
 		),
 	)
 }

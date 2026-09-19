@@ -10,14 +10,14 @@ import "fyne.io/fyne/v2/widget"
 import "github.com/skip2/go-qrcode"
 
 // qrQuietZone is the number of blank modules between the symbol and the
-// widget edge. A single-module margin keeps the code close to the address
-// text below it.
-const qrQuietZone = 1
+// widget edge. The code is drawn flush with the widget; the window
+// background around it acts as the quiet zone.
+const qrQuietZone = 0
 
 // qrCellPixels is the on-screen size of one QR module. The widget sizes
-// itself to fit all modules at this size plus the slim quiet zone, so the
-// cell size stays fixed while the margins shrink.
-const qrCellPixels = 13
+// itself to fit all modules at this size, keeping the code compact so the
+// address text sits right under its bottom edge.
+const qrCellPixels = 11
 
 // QRWidget renders the QR code of a text payload as a crisp,
 // resolution-independent raster that redraws at any widget size.
