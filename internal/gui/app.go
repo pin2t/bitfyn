@@ -1,22 +1,18 @@
 // Package gui implements the Fyne user interface of the wallet.
 package gui
 
-import (
-	"errors"
-	"fmt"
-	"log"
-	"path/filepath"
-	"time"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/widget"
-
-	"spvbit/internal/storage"
-	"spvbit/internal/wallet"
-)
+import "errors"
+import "fmt"
+import "log"
+import "path/filepath"
+import "time"
+import "fyne.io/fyne/v2"
+import "fyne.io/fyne/v2/app"
+import "fyne.io/fyne/v2/container"
+import "fyne.io/fyne/v2/dialog"
+import "fyne.io/fyne/v2/widget"
+import "spvbit/internal/storage"
+import "spvbit/internal/wallet"
 
 // Options configures the GUI.
 type Options struct {
@@ -27,12 +23,11 @@ type Options struct {
 
 // Run starts the Fyne application and blocks until the window is closed.
 func Run(opts Options) {
-	a := app.NewWithID("io.spvbit.wallet")
-	w := a.NewWindow("SPVBit")
+	var a = app.NewWithID("io.spvbit.wallet")
+	var w = a.NewWindow("SPVBit")
 	w.Resize(fyne.NewSize(420, 640))
 	w.CenterOnScreen()
-
-	ctrl, err := newController(opts, w)
+	var ctrl, err = newController(opts, w)
 	if err != nil {
 		log.Printf("startup failed: %v", err)
 		w.SetContent(container.NewVBox(
@@ -42,7 +37,6 @@ func Run(opts Options) {
 		w.ShowAndRun()
 		return
 	}
-
 	w.SetOnClosed(func() { _ = ctrl.store.Close() })
 	w.SetContent(ctrl.content())
 	w.ShowAndRun()
@@ -66,25 +60,23 @@ type controller struct {
 // newController opens the database, creating the wallet on first run, and
 // prepares the UI state.
 func newController(opts Options, w fyne.Window) (*controller, error) {
-	net, err := wallet.ParamsForNetwork(opts.Network)
+	var net, err = wallet.ParamsForNetwork(opts.Network)
 	if err != nil {
 		return nil, err
 	}
-
 	store, err := storage.Open(filepath.Join(opts.DataDir, "spvbit.db"), opts.DBPass)
 	if err != nil {
 		return nil, err
 	}
-	fail := func(err error) (*controller, error) {
+	var fail = func(err error) (*controller, error) {
 		_ = store.Close()
 		return nil, err
 	}
-
 	meta, err := store.Meta()
 	var wl *wallet.Wallet
 	switch {
 	case errors.Is(err, storage.ErrNoWallet):
-		mnemonic, err := wallet.NewMnemonic(128)
+		var mnemonic, err = wallet.NewMnemonic(128)
 		if err != nil {
 			return fail(fmt.Errorf("generate mnemonic: %w", err))
 		}
@@ -114,7 +106,6 @@ func newController(opts Options, w fyne.Window) (*controller, error) {
 			return fail(err)
 		}
 	}
-
 	return &controller{
 		window: w,
 		store:  store,
@@ -132,28 +123,24 @@ func (c *controller) content() fyne.CanvasObject {
 	c.addr.Wrapping = fyne.TextWrapBreak
 	c.path = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
 	c.status = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
-
-	copyBtn := widget.NewButton("Copy Address", func() {
+	var copyBtn = widget.NewButton("Copy Address", func() {
 		if c.addr.Text == "" {
 			return
 		}
 		fyne.CurrentApp().Clipboard().SetContent(c.addr.Text)
 		c.setStatus("address copied to clipboard")
 	})
-	nextBtn := widget.NewButton("New Address", func() {
+	var nextBtn = widget.NewButton("New Address", func() {
 		if err := c.nextAddress(); err != nil {
 			c.setStatus(fmt.Sprintf("error: %v", err))
 			dialog.ShowError(err, c.window)
 		}
 	})
-
-	title := widget.NewLabelWithStyle("SPVBit", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	netLabel := widget.NewLabelWithStyle("network: "+c.net, fyne.TextAlignCenter, fyne.TextStyle{})
-
+	var title = widget.NewLabelWithStyle("SPVBit", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	var netLabel = widget.NewLabelWithStyle("network: "+c.net, fyne.TextAlignCenter, fyne.TextStyle{})
 	if err := c.refreshAddress(); err != nil {
 		c.setStatus(fmt.Sprintf("error: %v", err))
 	}
-
 	return container.NewBorder(
 		container.NewVBox(title, netLabel),
 		c.status,
@@ -170,7 +157,7 @@ func (c *controller) content() fyne.CanvasObject {
 // refreshAddress derives the current address and updates QR, labels and the
 // address table.
 func (c *controller) refreshAddress() error {
-	address, path, pubkey, err := c.wallet.DeriveAddress(c.index)
+	var address, path, pubkey, err = c.wallet.DeriveAddress(c.index)
 	if err != nil {
 		return fmt.Errorf("derive address %d: %w", c.index, err)
 	}
@@ -190,8 +177,8 @@ func (c *controller) refreshAddress() error {
 // the UI. The database is updated first so the on-disk state stays the
 // source of truth.
 func (c *controller) nextAddress() error {
-	idx := c.index + 1
-	address, path, pubkey, err := c.wallet.DeriveAddress(idx)
+	var idx = c.index + 1
+	var address, path, pubkey, err = c.wallet.DeriveAddress(idx)
 	if err != nil {
 		return fmt.Errorf("derive address %d: %w", idx, err)
 	}
@@ -202,7 +189,6 @@ func (c *controller) nextAddress() error {
 		return fmt.Errorf("update next index: %w", err)
 	}
 	c.index = idx
-
 	if err := c.qr.SetContent(address); err != nil {
 		return fmt.Errorf("encode QR: %w", err)
 	}
@@ -215,7 +201,7 @@ func (c *controller) nextAddress() error {
 func (c *controller) setStatus(msg string) { c.status.SetText(msg) }
 
 func (c *controller) updateStatus() {
-	n, err := c.store.CountAddresses()
+	var n, err = c.store.CountAddresses()
 	if err != nil {
 		c.setStatus(fmt.Sprintf("error: %v", err))
 		return

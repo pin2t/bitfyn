@@ -2,18 +2,15 @@
 // Bitcoin wallet that produces native SegWit (P2WPKH, bech32) addresses.
 package wallet
 
-import (
-	"bytes"
-	"crypto/sha256"
-	"fmt"
-	"strings"
-
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/btcutil/base58"
-	"github.com/btcsuite/btcd/btcutil/hdkeychain"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/tyler-smith/go-bip39"
-)
+import "bytes"
+import "crypto/sha256"
+import "fmt"
+import "strings"
+import "github.com/btcsuite/btcd/btcutil"
+import "github.com/btcsuite/btcd/btcutil/base58"
+import "github.com/btcsuite/btcd/btcutil/hdkeychain"
+import "github.com/btcsuite/btcd/chaincfg"
+import "github.com/tyler-smith/go-bip39"
 
 // Purpose is BIP84: native SegWit, derivation m/84'/coin'/account'/change/index.
 const Purpose = 84
@@ -29,7 +26,7 @@ type Wallet struct {
 // NewMnemonic generates a fresh BIP39 mnemonic with the given entropy size
 // (128, 160, 192, 224 or 256 bits). 128 bits (12 words) is the default.
 func NewMnemonic(bits int) (string, error) {
-	entropy, err := bip39.NewEntropy(bits)
+	var entropy, err = bip39.NewEntropy(bits)
 	if err != nil {
 		return "", fmt.Errorf("generate entropy: %w", err)
 	}
@@ -47,8 +44,8 @@ func New(mnemonic, passphrase string, net *chaincfg.Params) (*Wallet, error) {
 	if !bip39.IsMnemonicValid(mnemonic) {
 		return nil, fmt.Errorf("invalid BIP39 mnemonic")
 	}
-	seed := bip39.NewSeed(mnemonic, passphrase)
-	master, err := hdkeychain.NewMaster(seed, net)
+	var seed = bip39.NewSeed(mnemonic, passphrase)
+	var master, err = hdkeychain.NewMaster(seed, net)
 	if err != nil {
 		return nil, fmt.Errorf("derive master key: %w", err)
 	}
@@ -71,7 +68,7 @@ func (w *Wallet) Net() *chaincfg.Params { return w.net }
 // (m/84'/coin'/0'), which is safe to store and use for watch-only purposes.
 // It is encoded with the SLIP-132 zpub/vpub version bytes for BIP84.
 func (w *Wallet) AccountXPub() (string, error) {
-	key, err := w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0)})
+	var key, err = w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0)})
 	if err != nil {
 		return "", err
 	}
@@ -100,7 +97,7 @@ func (w *Wallet) DeriveAddress(index uint32) (address, path string, pubkey []byt
 		return "", "", nil, fmt.Errorf("public key: %w", err)
 	}
 	pubkey = pub.SerializeCompressed()
-	hash := btcutil.Hash160(pubkey)
+	var hash = btcutil.Hash160(pubkey)
 	addr, err := btcutil.NewAddressWitnessPubKeyHash(hash, w.net)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("encode address: %w", err)
@@ -109,7 +106,7 @@ func (w *Wallet) DeriveAddress(index uint32) (address, path string, pubkey []byt
 }
 
 func (w *Wallet) derivePath(steps []uint32) (*hdkeychain.ExtendedKey, error) {
-	key := w.master
+	var key = w.master
 	for _, step := range steps {
 		var err error
 		key, err = key.Derive(step)
@@ -132,16 +129,16 @@ var (
 
 // toSLIP132 re-encodes a BIP32 extended public key with the SLIP-132 version
 // bytes appropriate for BIP84. btcd's hdkeychain always uses the plain
-// xpub/tpub versions; the payload is unchanged and the base58check checksum
-// is recomputed for the new version, producing the zpub/vpub strings modern
-// wallets expect for BIP84 accounts.
+// xpub/tpub versions; the 78-byte payload is unchanged and the base58check
+// checksum is recomputed for the new version, producing the zpub/vpub strings
+// modern wallets expect for BIP84 accounts. Keys with unknown version bytes
+// are returned unchanged.
 func toSLIP132(xpub string) (string, error) {
-	serialized := base58.Decode(xpub) // version(4) + payload(78) + checksum(4)
+	var serialized = base58.Decode(xpub)
 	if len(serialized) != 82 {
 		return xpub, nil
 	}
-	version, payload := serialized[:4], serialized[4:len(serialized)-4]
-
+	var version, payload = serialized[:4], serialized[4 : len(serialized)-4]
 	var newVersion []byte
 	switch {
 	case bytes.Equal(version, xpubVersion[:]):
@@ -149,11 +146,10 @@ func toSLIP132(xpub string) (string, error) {
 	case bytes.Equal(version, tpubVersion[:]):
 		newVersion = vpubVersion[:]
 	default:
-		return xpub, nil // already SLIP-132 or unknown: leave untouched
+		return xpub, nil
 	}
-
-	sum := checksum(newVersion, payload)
-	out := make([]byte, 0, 82)
+	var sum = checksum(newVersion, payload)
+	var out = make([]byte, 0, 82)
 	out = append(out, newVersion...)
 	out = append(out, payload...)
 	out = append(out, sum...)
@@ -162,12 +158,12 @@ func toSLIP132(xpub string) (string, error) {
 
 // checksum is the 4-byte double-SHA256 base58check checksum.
 func checksum(parts ...[]byte) []byte {
-	h := sha256.New()
+	var h = sha256.New()
 	for _, p := range parts {
 		h.Write(p)
 	}
-	first := h.Sum(nil)
-	h2 := sha256.Sum256(first)
+	var first = h.Sum(nil)
+	var h2 = sha256.Sum256(first)
 	return h2[:4]
 }
 

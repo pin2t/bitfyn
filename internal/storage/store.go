@@ -5,18 +5,15 @@
 // schema or code change.
 package storage
 
-import (
-	"database/sql"
-	"errors"
-	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
-
-	_ "github.com/mutecomm/go-sqlcipher/v4"
-)
+import "database/sql"
+import "errors"
+import "fmt"
+import "net/url"
+import "os"
+import "path/filepath"
+import "strings"
+import "time"
+import _ "github.com/mutecomm/go-sqlcipher/v4"
 
 // ErrNoWallet is returned when the database exists but holds no wallet yet.
 var ErrNoWallet = errors.New("no wallet stored in database")
@@ -64,17 +61,14 @@ func Open(path, passphrase string) (*Store, error) {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
 	}
-
-	dsn := path
+	var dsn = path
 	if passphrase != "" {
 		dsn = fmt.Sprintf("%s?_pragma_key=%s", path, url.QueryEscape(passphrase))
 	}
-
-	db, err := sql.Open("sqlite3", dsn)
+	var db, err = sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-
 	if err := migrate(db); err != nil {
 		db.Close()
 		if strings.Contains(strings.ToLower(err.Error()), "file is not a database") {
@@ -86,7 +80,7 @@ func Open(path, passphrase string) (*Store, error) {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
+	var _, err = db.Exec(schema)
 	return err
 }
 
@@ -96,7 +90,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // SaveMeta inserts the wallet metadata row. It is a no-op if a wallet is
 // already stored.
 func (s *Store) SaveMeta(mnemonic, xpub, network string, createdAt int64) error {
-	_, err := s.db.Exec(
+	var _, err = s.db.Exec(
 		`INSERT OR IGNORE INTO meta (id, mnemonic, xpub, network, created_at, next_index)
 		 VALUES (1, ?, ?, ?, ?, 0)`,
 		mnemonic, xpub, network, createdAt,
@@ -107,7 +101,7 @@ func (s *Store) SaveMeta(mnemonic, xpub, network string, createdAt int64) error 
 // Meta returns the wallet metadata row, or ErrNoWallet.
 func (s *Store) Meta() (Meta, error) {
 	var m Meta
-	err := s.db.QueryRow(
+	var err = s.db.QueryRow(
 		`SELECT mnemonic, xpub, network, created_at, next_index FROM meta WHERE id = 1`,
 	).Scan(&m.Mnemonic, &m.XPub, &m.Network, &m.CreatedAt, &m.NextIndex)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -121,13 +115,13 @@ func (s *Store) Meta() (Meta, error) {
 
 // UpdateNextIndex records the next derivation index to use.
 func (s *Store) UpdateNextIndex(index uint32) error {
-	_, err := s.db.Exec(`UPDATE meta SET next_index = ? WHERE id = 1`, index)
+	var _, err = s.db.Exec(`UPDATE meta SET next_index = ? WHERE id = 1`, index)
 	return err
 }
 
 // AddAddress persists a derived address. Idempotent per index.
 func (s *Store) AddAddress(index uint32, path, address string, pubkey []byte) error {
-	_, err := s.db.Exec(
+	var _, err = s.db.Exec(
 		`INSERT OR IGNORE INTO addresses (idx, derivation_path, address, pubkey, used, created_at)
 		 VALUES (?, ?, ?, ?, 0, ?)`,
 		index, path, address, pubkey, time.Now().Unix(),
@@ -138,6 +132,6 @@ func (s *Store) AddAddress(index uint32, path, address string, pubkey []byte) er
 // CountAddresses returns the number of derived addresses stored so far.
 func (s *Store) CountAddresses() (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM addresses`).Scan(&n)
+	var err = s.db.QueryRow(`SELECT COUNT(*) FROM addresses`).Scan(&n)
 	return n, err
 }

@@ -1,24 +1,20 @@
 // Command spvbit is an SPV Bitcoin wallet with a Fyne GUI.
 package main
 
-import (
-	"errors"
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"time"
-
-	"github.com/skip2/go-qrcode"
-
-	"spvbit/internal/gui"
-	"spvbit/internal/storage"
-	"spvbit/internal/wallet"
-)
+import "errors"
+import "flag"
+import "fmt"
+import "log"
+import "os"
+import "path/filepath"
+import "time"
+import "github.com/skip2/go-qrcode"
+import "spvbit/internal/gui"
+import "spvbit/internal/storage"
+import "spvbit/internal/wallet"
 
 func defaultDataDir() string {
-	home, err := os.UserHomeDir()
+	var home, err = os.UserHomeDir()
 	if err != nil {
 		return ".spvbit"
 	}
@@ -33,14 +29,12 @@ func main() {
 		check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
 	)
 	flag.Parse()
-
 	if *check {
 		if err := runCheck(*dataDir, *network, *dbPass); err != nil {
 			log.Fatalf("check failed: %v", err)
 		}
 		return
 	}
-
 	gui.Run(gui.Options{
 		DataDir: *dataDir,
 		Network: *network,
@@ -51,22 +45,20 @@ func main() {
 // runCheck exercises the full non-GUI pipeline: database, HD wallet, address
 // derivation and QR rendering. Useful for CI and quick smoke tests.
 func runCheck(dataDir, network, dbPass string) error {
-	net, err := wallet.ParamsForNetwork(network)
+	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil {
 		return err
 	}
-
 	store, err := storage.Open(filepath.Join(dataDir, "spvbit.db"), dbPass)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-
 	meta, err := store.Meta()
 	var w *wallet.Wallet
 	switch {
 	case errors.Is(err, storage.ErrNoWallet):
-		mnemonic, err := wallet.NewMnemonic(128)
+		var mnemonic, err = wallet.NewMnemonic(128)
 		if err != nil {
 			return err
 		}
@@ -97,7 +89,6 @@ func runCheck(dataDir, network, dbPass string) error {
 			return err
 		}
 	}
-
 	addr, path, pub, err := w.DeriveAddress(meta.NextIndex)
 	if err != nil {
 		return err
@@ -105,12 +96,10 @@ func runCheck(dataDir, network, dbPass string) error {
 	if err := store.AddAddress(meta.NextIndex, path, addr, pub); err != nil {
 		return err
 	}
-
-	qrPath := filepath.Join(dataDir, "address-qr.png")
+	var qrPath = filepath.Join(dataDir, "address-qr.png")
 	if err := qrcode.WriteFile(addr, qrcode.Medium, 256, qrPath); err != nil {
 		return err
 	}
-
 	fmt.Printf("network:      %s\n", meta.Network)
 	fmt.Printf("account xpub: %s\n", meta.XPub)
 	fmt.Printf("next index:   %d\n", meta.NextIndex)

@@ -71,6 +71,35 @@ Includes the official BIP84 test vector (mnemonic `abandon ... about` →
 `bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu`) and encrypted-DB round-trip
 tests.
 
+## CI & linters
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes to
+`main` and on every pull request: build, plain `go vet`, the four
+[govets](https://github.com/pin2t/govets) linters (pinned to `v1.2.0`),
+gofmt and the test suite.
+
+The govets linters enforce a strict style that the codebase follows:
+
+- `imports-vet` — every import has its own `import` keyword and line, with no
+  blank lines between imports;
+- `funcbody-vet` — no comments and no blank lines inside function bodies;
+  explanations live in doc comments above the function;
+- `vardecl-vet` — `var x = f()` instead of `x := f()` wherever Go allows it;
+- `varname-vet` — function-body variables have at most two camel-case words.
+
+To run them locally:
+
+```sh
+go install github.com/pin2t/govets/imports-vet@v1.2.0 github.com/pin2t/govets/funcbody-vet@v1.2.0 github.com/pin2t/govets/vardecl-vet@v1.2.0 github.com/pin2t/govets/varname-vet@v1.2.0
+go vet -vettool="$(go env GOPATH)/bin/imports-vet" ./...
+go vet -vettool="$(go env GOPATH)/bin/funcbody-vet" ./...
+go vet -vettool="$(go env GOPATH)/bin/vardecl-vet" ./...
+go vet -vettool="$(go env GOPATH)/bin/varname-vet" ./...
+```
+
+Keep running plain `go vet ./...` as well: `-vettool` replaces, not adds to,
+the built-in analyzers.
+
 ## Roadmap
 
 - [x] HD key generation, SegWit addresses, QR display, encrypted SQLite

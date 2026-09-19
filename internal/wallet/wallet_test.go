@@ -1,30 +1,25 @@
 package wallet
 
-import (
-	"strings"
-	"testing"
+import "strings"
+import "testing"
+import "github.com/btcsuite/btcd/chaincfg"
 
-	"github.com/btcsuite/btcd/chaincfg"
-)
-
-// Well-known BIP84 test vector (mainnet).
+// vectorMnemonic is the well-known BIP84 test vector mnemonic (mainnet).
 const vectorMnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
+// TestBIP84Vector checks the official BIP84 test vector: the first receive
+// address derived from the vector mnemonic.
 func TestBIP84Vector(t *testing.T) {
-	w, err := New(vectorMnemonic, "", &chaincfg.MainNetParams)
+	var w, err = New(vectorMnemonic, "", &chaincfg.MainNetParams)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
 	addr, path, pub, err := w.DeriveAddress(0)
 	if err != nil {
 		t.Fatalf("DeriveAddress: %v", err)
 	}
-
-	const (
-		wantAddr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
-		wantPath = "m/84'/0'/0'/0/0"
-	)
+	const wantAddr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+	const wantPath = "m/84'/0'/0'/0/0"
 	if addr != wantAddr {
 		t.Errorf("address = %s, want %s", addr, wantAddr)
 	}
@@ -36,8 +31,10 @@ func TestBIP84Vector(t *testing.T) {
 	}
 }
 
+// TestDeterministicDerivation checks that restoring the same mnemonic yields
+// the same addresses and that distinct indices yield distinct addresses.
 func TestDeterministicDerivation(t *testing.T) {
-	w1, err := New(vectorMnemonic, "", &chaincfg.MainNetParams)
+	var w1, err = New(vectorMnemonic, "", &chaincfg.MainNetParams)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -45,10 +42,9 @@ func TestDeterministicDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
 	var prev string
 	for i := uint32(0); i < 5; i++ {
-		a1, _, _, err := w1.DeriveAddress(i)
+		var a1, _, _, err = w1.DeriveAddress(i)
 		if err != nil {
 			t.Fatalf("DeriveAddress(%d): %v", i, err)
 		}
@@ -66,8 +62,9 @@ func TestDeterministicDerivation(t *testing.T) {
 	}
 }
 
+// TestTestnet checks the testnet coin type (1') and the tb1 address prefix.
 func TestTestnet(t *testing.T) {
-	mnemonic, err := NewMnemonic(128)
+	var mnemonic, err = NewMnemonic(128)
 	if err != nil {
 		t.Fatalf("NewMnemonic: %v", err)
 	}
@@ -87,8 +84,10 @@ func TestTestnet(t *testing.T) {
 	}
 }
 
+// TestAccountXPub checks the account-level key against the BIP84 test vector
+// zpub for m/84'/0'/0'.
 func TestAccountXPub(t *testing.T) {
-	w, err := New(vectorMnemonic, "", &chaincfg.MainNetParams)
+	var w, err = New(vectorMnemonic, "", &chaincfg.MainNetParams)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -96,15 +95,15 @@ func TestAccountXPub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccountXPub: %v", err)
 	}
-	// BIP84 test vector account xpub for m/84'/0'/0'.
 	const want = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"
 	if xpub != want {
 		t.Errorf("xpub = %s, want %s", xpub, want)
 	}
 }
 
+// TestParamsForNetwork checks network name resolution.
 func TestParamsForNetwork(t *testing.T) {
-	cases := map[string]string{
+	var cases = map[string]string{
 		"mainnet": "mainnet",
 		"bitcoin": "mainnet",
 		"testnet": "testnet3",
@@ -112,7 +111,7 @@ func TestParamsForNetwork(t *testing.T) {
 		"simnet":  "simnet",
 	}
 	for in, want := range cases {
-		p, err := ParamsForNetwork(in)
+		var p, err = ParamsForNetwork(in)
 		if err != nil {
 			t.Fatalf("ParamsForNetwork(%q): %v", in, err)
 		}

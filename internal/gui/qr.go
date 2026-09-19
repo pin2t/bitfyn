@@ -1,15 +1,12 @@
 package gui
 
-import (
-	"image"
-	"image/color"
-	"image/draw"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/widget"
-	"github.com/skip2/go-qrcode"
-)
+import "image"
+import "image/color"
+import "image/draw"
+import "fyne.io/fyne/v2"
+import "fyne.io/fyne/v2/canvas"
+import "fyne.io/fyne/v2/widget"
+import "github.com/skip2/go-qrcode"
 
 // qrQuietZone is the number of blank modules around the QR symbol.
 const qrQuietZone = 4
@@ -23,7 +20,7 @@ type QRWidget struct {
 
 // NewQRWidget creates a QR widget for the given payload.
 func NewQRWidget(content string) *QRWidget {
-	q := &QRWidget{}
+	var q = &QRWidget{}
 	q.ExtendBaseWidget(q)
 	_ = q.SetContent(content)
 	return q
@@ -31,7 +28,7 @@ func NewQRWidget(content string) *QRWidget {
 
 // SetContent replaces the encoded payload and refreshes the widget.
 func (q *QRWidget) SetContent(content string) error {
-	code, err := qrcode.New(content, qrcode.Medium)
+	var code, err = qrcode.New(content, qrcode.Medium)
 	if err != nil {
 		return err
 	}
@@ -42,7 +39,7 @@ func (q *QRWidget) SetContent(content string) error {
 
 // CreateRenderer implements fyne.Widget.
 func (q *QRWidget) CreateRenderer() fyne.WidgetRenderer {
-	r := &qrRenderer{widget: q}
+	var r = &qrRenderer{widget: q}
 	r.raster = canvas.NewRaster(q.generate)
 	return r
 }
@@ -50,30 +47,27 @@ func (q *QRWidget) CreateRenderer() fyne.WidgetRenderer {
 // generate draws the QR modules into an image of size w×h with a standard
 // quiet zone, centred in the available space.
 func (q *QRWidget) generate(w, h int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var img = image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
-
-	n := len(q.modules)
+	var n = len(q.modules)
 	if n == 0 || w == 0 || h == 0 {
 		return img
 	}
-
-	total := n + 2*qrQuietZone
-	scale := min(w, h)
-	cell := scale / total
+	var total = n + 2*qrQuietZone
+	var scale = min(w, h)
+	var cell = scale / total
 	if cell < 1 {
 		cell = 1
 	}
-	ox := (w - total*cell) / 2
-	oy := (h - total*cell) / 2
-
-	black := image.NewUniform(color.RGBA{R: 0, G: 0, B: 0, A: 255})
+	var ox = (w - total*cell) / 2
+	var oy = (h - total*cell) / 2
+	var black = image.NewUniform(color.RGBA{R: 0, G: 0, B: 0, A: 255})
 	for y, row := range q.modules {
 		for x, on := range row {
 			if !on {
 				continue
 			}
-			r := image.Rect(
+			var r = image.Rect(
 				ox+(x+qrQuietZone)*cell, oy+(y+qrQuietZone)*cell,
 				ox+(x+qrQuietZone+1)*cell, oy+(y+qrQuietZone+1)*cell,
 			)
