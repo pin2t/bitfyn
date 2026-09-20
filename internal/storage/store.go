@@ -35,6 +35,29 @@ create table if not exists addresses (
 	used           integer not null default 0,
 	createdAt      integer not null
 );
+create table if not exists headers (
+	height     integer primary key,
+	hash       blob not null unique,
+	prevHash   blob not null,
+	merkleRoot blob not null,
+	version    integer not null,
+	timestamp  integer not null,
+	bits       integer not null,
+	nonce      integer not null
+);
+create table if not exists cfilters (
+	height       integer primary key,
+	blockHash    blob not null,
+	filterHeader blob not null,
+	filterData   blob not null
+);
+create table if not exists matches (
+	height    integer not null,
+	blockHash blob    not null,
+	address   text    not null,
+	script    blob    not null,
+	primary key (height, address)
+);
 `
 
 // Meta is the single wallet metadata row.
