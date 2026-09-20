@@ -10,8 +10,7 @@ Current milestone: wallet bootstrap —
   centre of the window** with the address text below it,
 - keys, xpub and derived addresses stored in **SQLite built with SQLCipher**
   (encrypted storage, cgo-based driver),
-- `Copy Address` and `New Address` actions (derives the next index on
-  `m/84'/coin'/0'/0/i`).
+- a clipboard icon next to the address to copy it.
 
 ## Build
 

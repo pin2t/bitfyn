@@ -10,6 +10,7 @@ import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
+import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
 import "bitfyn/internal/storage"
@@ -28,7 +29,7 @@ func Run(opts Options) {
 	var w = a.NewWindow("BitFyn")
 	w.Resize(fyne.NewSize(460, 700))
 	w.CenterOnScreen()
-	var ctrl, err = newGUI(opts, w)
+	var gui, err = newGUI(opts, w)
 	if err != nil {
 		log.Printf("startup failed: %v", err)
 		w.SetContent(container.NewVBox(
@@ -38,8 +39,8 @@ func Run(opts Options) {
 		w.ShowAndRun()
 		return
 	}
-	w.SetOnClosed(func() { _ = ctrl.store.Close() })
-	w.SetContent(ctrl.content())
+	w.SetOnClosed(func() { _ = gui.store.Close() })
+	w.SetContent(gui.content())
 	w.ShowAndRun()
 }
 
@@ -100,24 +101,18 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	}, nil
 }
 
-// content builds the window layout: the address QR code in the centre, the
-// address text below it, and the action buttons.
+// content builds the window layout: the address QR code in the centre and
+// the address text right below it with a clipboard copy icon directly after
+// the text.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	g.addr.Wrapping = fyne.TextWrapBreak
-	var copyBtn = widget.NewButton("Copy Address", func() {
-		if g.addr.Text == "" {
-			return
-		}
+	var copyBtn = widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		if g.addr.Text == "" { return }
 		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
 		dialog.ShowInformation("Copied", "Address copied to clipboard", g.window)
 	})
-	var nextBtn = widget.NewButton("New Address", func() {
-		if err := g.nextAddress(); err != nil {
-			dialog.ShowError(err, g.window)
-		}
-	})
+	copyBtn.Importance = widget.LowImportance
 	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	var top = container.NewVBox(title)
 	if g.wallet.Net().Net != chaincfg.MainNetParams.Net {
@@ -126,15 +121,10 @@ func (g *gui) content() fyne.CanvasObject {
 	if err := g.refreshAddress(); err != nil {
 		dialog.ShowError(err, g.window)
 	}
-	return container.NewBorder(
+	return container.NewVBox(
 		top,
-		nil,
-		nil, nil,
-		container.NewVBox(
-			container.NewCenter(g.qr),
-			g.addr,
-			container.NewCenter(container.NewHBox(copyBtn, nextBtn)),
-		),
+		container.NewCenter(g.qr),
+		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 	)
 }
 
@@ -152,28 +142,5 @@ func (g *gui) refreshAddress() error {
 	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
-	return nil
-}
-
-// nextAddress derives the next receive address, persists it and refreshes
-// the UI. The database is updated first so the on-disk state stays the
-// source of truth.
-func (g *gui) nextAddress() error {
-	var idx = g.index + 1
-	var address, path, pubkey, err = g.wallet.DeriveAddress(idx)
-	if err != nil {
-		return fmt.Errorf("derive address %d: %w", idx, err)
-	}
-	if err := g.store.AddAddress(idx, path, address, pubkey); err != nil {
-		return fmt.Errorf("store address: %w", err)
-	}
-	if err := g.store.UpdateNextIndex(idx); err != nil {
-		return fmt.Errorf("update next index: %w", err)
-	}
-	g.index = idx
-	if err := g.qr.SetContent(address); err != nil {
-		return fmt.Errorf("encode QR: %w", err)
-	}
-	g.addr.SetText(address)
 	return nil
 }
