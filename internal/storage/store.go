@@ -19,21 +19,21 @@ import _ "github.com/mutecomm/go-sqlcipher/v4"
 var ErrNoWallet = errors.New("no wallet stored in database")
 
 const schema = `
-CREATE TABLE IF NOT EXISTS meta (
-	id         INTEGER PRIMARY KEY CHECK (id = 1),
-	mnemonic   BLOB    NOT NULL,
-	xpub       TEXT    NOT NULL,
-	network    TEXT    NOT NULL,
-	created_at INTEGER NOT NULL,
-	next_index INTEGER NOT NULL DEFAULT 0
+create table if not exists meta (
+	id        integer primary key check (id = 1),
+	mnemonic  blob    not null,
+	xpub      text    not null,
+	network   text    not null,
+	createdAt integer not null,
+	nextIndex integer not null default 0
 );
-CREATE TABLE IF NOT EXISTS addresses (
-	idx             INTEGER PRIMARY KEY,
-	derivation_path TEXT    NOT NULL UNIQUE,
-	address         TEXT    NOT NULL UNIQUE,
-	pubkey          BLOB    NOT NULL,
-	used            INTEGER NOT NULL DEFAULT 0,
-	created_at      INTEGER NOT NULL
+create table if not exists addresses (
+	idx            integer primary key,
+	derivationPath text    not null unique,
+	address        text    not null unique,
+	pubkey         blob    not null,
+	used           integer not null default 0,
+	createdAt      integer not null
 );
 `
 
@@ -91,8 +91,8 @@ func (s *Store) Close() error { return s.db.Close() }
 // already stored.
 func (s *Store) SaveMeta(mnemonic, xpub, network string, createdAt int64) error {
 	var _, err = s.db.Exec(
-		`INSERT OR IGNORE INTO meta (id, mnemonic, xpub, network, created_at, next_index)
-		 VALUES (1, ?, ?, ?, ?, 0)`,
+		`insert or ignore into meta (id, mnemonic, xpub, network, createdAt, nextIndex)
+		 values (1, ?, ?, ?, ?, 0)`,
 		mnemonic, xpub, network, createdAt,
 	)
 	return err
@@ -102,7 +102,7 @@ func (s *Store) SaveMeta(mnemonic, xpub, network string, createdAt int64) error 
 func (s *Store) Meta() (Meta, error) {
 	var m Meta
 	var err = s.db.QueryRow(
-		`SELECT mnemonic, xpub, network, created_at, next_index FROM meta WHERE id = 1`,
+		`select mnemonic, xpub, network, createdAt, nextIndex from meta where id = 1`,
 	).Scan(&m.Mnemonic, &m.XPub, &m.Network, &m.CreatedAt, &m.NextIndex)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Meta{}, ErrNoWallet
@@ -115,15 +115,15 @@ func (s *Store) Meta() (Meta, error) {
 
 // UpdateNextIndex records the next derivation index to use.
 func (s *Store) UpdateNextIndex(index uint32) error {
-	var _, err = s.db.Exec(`UPDATE meta SET next_index = ? WHERE id = 1`, index)
+	var _, err = s.db.Exec(`update meta set nextIndex = ? where id = 1`, index)
 	return err
 }
 
 // AddAddress persists a derived address. Idempotent per index.
 func (s *Store) AddAddress(index uint32, path, address string, pubkey []byte) error {
 	var _, err = s.db.Exec(
-		`INSERT OR IGNORE INTO addresses (idx, derivation_path, address, pubkey, used, created_at)
-		 VALUES (?, ?, ?, ?, 0, ?)`,
+		`insert or ignore into addresses (idx, derivationPath, address, pubkey, used, createdAt)
+		 values (?, ?, ?, ?, 0, ?)`,
 		index, path, address, pubkey, time.Now().Unix(),
 	)
 	return err
@@ -132,6 +132,6 @@ func (s *Store) AddAddress(index uint32, path, address string, pubkey []byte) er
 // CountAddresses returns the number of derived addresses stored so far.
 func (s *Store) CountAddresses() (int, error) {
 	var n int
-	var err = s.db.QueryRow(`SELECT COUNT(*) FROM addresses`).Scan(&n)
+	var err = s.db.QueryRow(`select count(*) from addresses`).Scan(&n)
 	return n, err
 }
