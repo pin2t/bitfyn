@@ -122,14 +122,10 @@ func (g *gui) content() fyne.CanvasObject {
 	if err := g.refreshAddress(); err != nil {
 		dialog.ShowError(err, g.window)
 	}
-	return container.NewBorder(
+	return container.NewVBox(
 		top,
-		nil,
-		nil, nil,
-		container.NewVBox(
-			container.NewCenter(g.qr),
-			container.NewCenter(container.NewHBox(g.addr, copyBtn)),
-		),
+		container.NewCenter(g.qr),
+		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 	)
 }
 
