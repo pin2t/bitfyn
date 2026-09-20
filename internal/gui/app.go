@@ -107,7 +107,6 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	g.addr.Wrapping = fyne.TextWrapBreak
 	var copyBtn = widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		if g.addr.Text == "" { return }
 		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
