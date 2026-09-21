@@ -5,9 +5,13 @@ import "errors"
 import "flag"
 import "fmt"
 import "log"
+import "math/rand/v2"
+import "net"
 import "os"
 import "path/filepath"
+import "strconv"
 import "time"
+import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/skip2/go-qrcode"
 import "bitfyn/internal/gui"
 import "bitfyn/internal/p2p"
@@ -107,13 +111,14 @@ func runCheck(dataDir, network, dbPass string) error {
 	return nil
 }
 
-// runSync connects to a P2P peer and performs the SPV sync: block headers,
-// BIP158 basic filters and wallet address matching.
+// runSync performs the SPV sync: block headers, BIP158 basic filters and
+// wallet address matching. Peers are tried one by one; a disconnected or
+// failing peer is replaced by the next candidate.
 func runSync(dataDir, network, dbPass, peerAddr string) error {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return err }
-	store, w, err := openWallet(dataDir, network, dbPass)
-	if err != nil { return err }
+	var store, w, err2 = openWallet(dataDir, network, dbPass)
+	if err2 != nil { return err2 }
 	defer store.Close()
 	count, err := store.CountAddresses()
 	if err != nil { return err }
@@ -126,32 +131,99 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 			return err
 		}
 	}
-	address, err := p2p.ResolveAddress(net, peerAddr)
-	if err != nil { return err }
 	syncer, err := spv.NewSyncer(net, store, syncProgress)
 	if err != nil { return err }
-	peerConn, err := p2p.Dial(net, address, syncer.Listeners())
-	if err != nil { return err }
-	defer func() {
-		peerConn.Disconnect()
-		peerConn.WaitForDisconnect()
-	}()
-	log.Printf("connected to %s", address)
-	tip, err := syncer.SyncHeaders(peerConn)
-	if err != nil { return err }
-	filters, err := syncer.SyncFilters(peerConn)
-	if err != nil { return err }
+	var candidates, err3 = syncPeers(net, store, peerAddr)
+	if err3 != nil { return err3 }
+	var tip int32
+	var filters int32
+	var lastErr error
+	for _, addr := range candidates {
+		tip, filters, err = syncFromPeer(net, store, syncer, addr)
+		if err == nil { break }
+		lastErr = err
+		log.Printf("sync via %s failed: %v", addr, err)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("all %d peers failed, last error: %w", len(candidates), lastErr)
+	}
 	matches, err := store.Matches()
 	if err != nil { return err }
 	var blocks = make(map[int32]bool)
 	for _, m := range matches {
 		blocks[m.Height] = true
 	}
-	fmt.Printf("peer:    %s\n", address)
 	fmt.Printf("tip:     height %d\n", tip)
 	fmt.Printf("filters: %d downloaded\n", filters)
 	fmt.Printf("matches: %d script hits in %d blocks\n", len(matches), len(blocks))
 	return nil
+}
+
+// syncPeers builds the ordered list of peers to try: the explicit address
+// first when given, then stored and freshly discovered peers in random order.
+func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) ([]string, error) {
+	var list []string
+	var seen = make(map[string]bool)
+	var add = func(addr string) {
+		if addr == "" || seen[addr] { return }
+		seen[addr] = true
+		list = append(list, addr)
+	}
+	var start = 0
+	if explicit != "" {
+		if _, _, err := net.SplitHostPort(explicit); err != nil {
+			return nil, fmt.Errorf("peer address %q must include a port", explicit)
+		}
+		add(explicit)
+		start = 1
+	}
+	var stored, err = store.Peers()
+	if err != nil { return nil, err }
+	for _, p := range stored {
+		add(net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
+	}
+	for _, seed := range p2p.Seeds(params) {
+		add(seed.String())
+	}
+	rand.Shuffle(len(list)-start, func(i, j int) {
+		list[start+i], list[start+j] = list[start+j], list[start+i]
+	})
+	if len(list) == 0 {
+		return nil, fmt.Errorf("no peer addresses for network %s (pass -peer or run a local node)", params.Name)
+	}
+	return list, nil
+}
+
+// syncFromPeer dials one peer and runs the header and filter sync on it,
+// storing the peer address for future runs.
+func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, addr string) (int32, int32, error) {
+	log.Printf("syncing from %s", addr)
+	var conn, err = p2p.Dial(params, addr, syncer.Listeners())
+	if err != nil { return 0, 0, err }
+	defer func() {
+		conn.Disconnect()
+		conn.WaitForDisconnect()
+	}()
+	var host, port, perr = splitHostPort(addr)
+	if perr == nil {
+		if serr := store.SavePeer(host, port); serr != nil {
+			log.Printf("store peer %s: %v", addr, serr)
+		}
+	}
+	var tip, herr = syncer.SyncHeaders(conn)
+	if herr != nil { return 0, 0, fmt.Errorf("headers: %w", herr) }
+	var filters, ferr = syncer.SyncFilters(conn)
+	if ferr != nil { return 0, 0, fmt.Errorf("filters: %w", ferr) }
+	return tip, filters, nil
+}
+
+// splitHostPort splits a host:port address into its parts.
+func splitHostPort(addr string) (string, uint16, error) {
+	var host, port, err = net.SplitHostPort(addr)
+	if err != nil { return "", 0, err }
+	var num, err2 = strconv.Atoi(port)
+	if err2 != nil { return "", 0, err2 }
+	return host, uint16(num), nil
 }
 
 // syncProgress logs the sync stage and the height reached so far.

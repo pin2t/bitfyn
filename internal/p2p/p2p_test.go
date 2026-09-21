@@ -1,33 +1,15 @@
 package p2p
 
 import "testing"
-import "github.com/btcsuite/btcd/chaincfg"
 
-// TestResolveAddressExplicit checks that an explicit host:port is kept.
-func TestResolveAddressExplicit(t *testing.T) {
-	var got, err = ResolveAddress(&chaincfg.MainNetParams, "127.0.0.1:8333")
-	if err != nil {
-		t.Fatalf("ResolveAddress: %v", err)
+// TestPeerAddrString checks the dialable form of peer addresses.
+func TestPeerAddrString(t *testing.T) {
+	var v4 = PeerAddr{Host: "192.0.2.1", Port: 8333}
+	if v4.String() != "192.0.2.1:8333" {
+		t.Fatalf("v4 address = %q, want %q", v4.String(), "192.0.2.1:8333")
 	}
-	if got != "127.0.0.1:8333" {
-		t.Fatalf("address = %q, want %q", got, "127.0.0.1:8333")
-	}
-}
-
-// TestResolveAddressNeedsPort checks that a port-less address is rejected.
-func TestResolveAddressNeedsPort(t *testing.T) {
-	if _, err := ResolveAddress(&chaincfg.MainNetParams, "127.0.0.1"); err == nil {
-		t.Fatal("address without port accepted")
-	}
-}
-
-// TestResolveAddressRegtest checks the local fallback for regtest.
-func TestResolveAddressRegtest(t *testing.T) {
-	var got, err = ResolveAddress(&chaincfg.RegressionNetParams, "")
-	if err != nil {
-		t.Fatalf("ResolveAddress: %v", err)
-	}
-	if got != "127.0.0.1:18444" {
-		t.Fatalf("address = %q, want %q", got, "127.0.0.1:18444")
+	var v6 = PeerAddr{Host: "2001:db8::1", Port: 18333}
+	if v6.String() != "[2001:db8::1]:18333" {
+		t.Fatalf("v6 address = %q, want %q", v6.String(), "[2001:db8::1]:18333")
 	}
 }

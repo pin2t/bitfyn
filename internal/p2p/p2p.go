@@ -6,6 +6,7 @@ package p2p
 
 import "fmt"
 import "net"
+import "strconv"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/btcsuite/btcd/peer"
@@ -13,6 +14,17 @@ import "github.com/btcsuite/btcd/wire"
 
 // HandshakeTimeout bounds the TCP dial and the version/verack exchange.
 const HandshakeTimeout = 15 * time.Second
+
+// PeerAddr is one candidate peer: an IP address and its TCP port.
+type PeerAddr struct {
+	Host string
+	Port uint16
+}
+
+// String returns the dialable host:port form of the address.
+func (a PeerAddr) String() string {
+	return net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port)))
+}
 
 // Dial connects to the given peer address and completes the version/verack
 // handshake, leaving the peer ready for message exchange. The listeners are
@@ -53,33 +65,38 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 	return nil, fmt.Errorf("handshake with %s timed out", address)
 }
 
-// ResolveAddress returns the peer address to dial for a network. An explicit
-// host:port is returned unchanged; otherwise a well-known DNS seed for the
-// network is resolved and its first IP address is used. The local test
-// networks fall back to their default localhost ports.
-func ResolveAddress(params *chaincfg.Params, address string) (string, error) {
-	if address != "" {
-		if _, _, err := net.SplitHostPort(address); err != nil {
-			return "", fmt.Errorf("peer address %q must include a port", address)
-		}
-		return address, nil
+// Seeds resolves every IP address advertised by the network's DNS seeds.
+// The local test networks have no seeds and return an empty list.
+func Seeds(params *chaincfg.Params) []PeerAddr {
+	type seedHost struct {
+		host string
+		port uint16
 	}
-	var host, port string
+	var seeds []seedHost
 	switch params.Net {
 	case chaincfg.MainNetParams.Net:
-		host, port = "seed.bitcoin.sipa.be", "8333"
+		seeds = []seedHost{
+			{"seed.bitcoin.sipa.be", 8333},
+			{"dnsseed.bluematt.me", 8333},
+			{"dnsseed.bitcoin.dashjr.org", 8333},
+			{"seed.bitcoin.jonasschnelli.ch", 8333},
+		}
 	case chaincfg.TestNet3Params.Net:
-		host, port = "testnet-seed.bitcoin.jonasschnelli.ch", "18333"
-	case chaincfg.RegressionNetParams.Net:
-		return "127.0.0.1:18444", nil
-	case chaincfg.SimNetParams.Net:
-		return "127.0.0.1:18555", nil
+		seeds = []seedHost{
+			{"testnet-seed.bitcoin.jonasschnelli.ch", 18333},
+			{"seed.tbtc.petertodd.org", 18333},
+			{"testnet-seed.bluematt.me", 18333},
+		}
 	default:
-		return "", fmt.Errorf("no peer seed for network %s", params.Name)
+		return nil
 	}
-	var ips, err = net.LookupHost(host)
-	if err != nil || len(ips) == 0 {
-		return "", fmt.Errorf("resolve seed %s: %w", host, err)
+	var out []PeerAddr
+	for _, seed := range seeds {
+		var ips, err = net.LookupHost(seed.host)
+		if err != nil { continue }
+		for _, ip := range ips {
+			out = append(out, PeerAddr{Host: ip, Port: seed.port})
+		}
 	}
-	return net.JoinHostPort(ips[0], port), nil
+	return out
 }

@@ -15,7 +15,10 @@ Current milestone: SPV sync —
   validated (proof of work, timestamps, difficulty retarget) and persisted,
 - **BIP158 basic filters**: compact block filters are downloaded, verified
   against their filter header chain and matched against the wallet scripts;
-  hits are recorded for the later transaction-fetch milestone.
+  hits are recorded for the later transaction-fetch milestone,
+- **peer failover**: peers are picked at random from the stored peer list and
+  the network DNS seeds; on disconnect or error the sync moves to the next
+  peer, and every learned peer address is persisted in the database.
 
 ## Build
 
@@ -47,7 +50,7 @@ Flags:
 | `-dbpass`  | *(empty)*    | SQLCipher passphrase; empty = unencrypted DB     |
 | `-check`   | `false`      | init wallet, print address, exit (no GUI)        |
 | `-sync`    | `false`      | headless SPV sync: headers + BIP158 filters + match |
-| `-peer`    | *(empty)*    | sync peer `host:port`; default: a DNS seed       |
+| `-peer`    | *(empty)*    | preferred peer `host:port`; other peers come from the stored list and DNS seeds |
 
 ## Security / encryption notes
 

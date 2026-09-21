@@ -39,6 +39,12 @@ type StoredAddress struct {
 	Pubkey  []byte
 }
 
+// Peer is one known network peer address.
+type Peer struct {
+	Host string
+	Port uint16
+}
+
 // SaveHeader persists one validated header, replacing any row at the height.
 func (s *Store) SaveHeader(h Header) error {
 	var hash = h.Hash[:]
@@ -161,6 +167,30 @@ func (s *Store) Addresses() ([]StoredAddress, error) {
 			return nil, err
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SavePeer records a known peer address. Idempotent.
+func (s *Store) SavePeer(host string, port uint16) error {
+	var _, err = s.db.Exec(`insert or ignore into peers (host, port) values (?, ?)`, host, port)
+	return err
+}
+
+// Peers returns every known peer address.
+func (s *Store) Peers() ([]Peer, error) {
+	var rows, err = s.db.Query(`select host, port from peers`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Peer
+	for rows.Next() {
+		var p Peer
+		if err := rows.Scan(&p.Host, &p.Port); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

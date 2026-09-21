@@ -91,12 +91,19 @@ func NewSyncer(params *chaincfg.Params, store *storage.Store, progress Progress)
 }
 
 // Listeners returns the peer message listeners wired to this syncer. They
-// must be installed before the connection is established.
+// must be installed before the connection is established. Advertised peer
+// addresses are persisted for later syncs.
 func (s *Syncer) Listeners() peer.MessageListeners {
 	return peer.MessageListeners{
 		OnHeaders:   func(_ *peer.Peer, msg *wire.MsgHeaders) { s.hdrCh <- msg },
 		OnCFHeaders: func(_ *peer.Peer, msg *wire.MsgCFHeaders) { s.cfhdrCh <- msg },
 		OnCFilter:   func(_ *peer.Peer, msg *wire.MsgCFilter) { s.fltCh <- msg },
+		OnAddr: func(_ *peer.Peer, msg *wire.MsgAddr) {
+			for _, na := range msg.AddrList {
+				if na.IP == nil || na.Port == 0 { continue }
+				_ = s.store.SavePeer(na.IP.String(), na.Port)
+			}
+		},
 	}
 }
 
@@ -112,7 +119,7 @@ func (s *Syncer) SyncHeaders(p *peer.Peer) (int32, error) {
 		msg.ProtocolVersion = p.ProtocolVersion()
 		msg.BlockLocatorHashes = s.chain.Locator()
 		p.QueueMessage(msg, nil)
-		var batch, err = s.waitHeaders()
+		var batch, err = s.waitHeaders(p)
 		if err != nil { return s.chain.Height(), err }
 		if len(batch) == 0 { break }
 		if err := s.extendHeaders(batch); err != nil {
@@ -125,7 +132,6 @@ func (s *Syncer) SyncHeaders(p *peer.Peer) (int32, error) {
 	s.report("headers", tip.Height)
 	return tip.Height, nil
 }
-
 // SyncFilters downloads and verifies the BIP158 basic filters for every
 // header in the chain, matching each filter against the wallet scripts. It
 // returns the number of new filters downloaded.
@@ -183,7 +189,7 @@ func (s *Syncer) extendHeaders(batch []*wire.BlockHeader) error {
 func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.Hash) error {
 	var msg = wire.NewMsgGetCFHeaders(wire.GCSFilterRegular, uint32(start), &stop)
 	p.QueueMessage(msg, nil)
-	var resp, err = s.waitCFHeaders()
+	var resp, err = s.waitCFHeaders(p)
 	if err != nil { return err }
 	if resp.FilterType != wire.GCSFilterRegular {
 		return fmt.Errorf("unexpected filter type %d", resp.FilterType)
@@ -223,7 +229,7 @@ func (s *Syncer) requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) 
 	p.QueueMessage(msg, nil)
 	var expected = s.chain.HeightOf(stop) - start + 1
 	for range expected {
-		var resp, err = s.waitCFilter()
+		var resp, err = s.waitCFilter(p)
 		if err != nil { return err }
 		if err := s.storeFilter(resp); err != nil { return err }
 	}
@@ -266,30 +272,60 @@ func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
 	return nil
 }
 
-func (s *Syncer) waitHeaders() ([]*wire.BlockHeader, error) {
-	select {
-	case msg := <-s.hdrCh:
-		return msg.Headers, nil
-	case <-time.After(requestTimeout):
-		return nil, fmt.Errorf("no headers response within %s", requestTimeout)
+func (s *Syncer) waitHeaders(p *peer.Peer) ([]*wire.BlockHeader, error) {
+	var ticker = time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var deadline = time.Now().Add(requestTimeout)
+	for {
+		select {
+		case msg := <-s.hdrCh:
+			return msg.Headers, nil
+		case <-ticker.C:
+			if !p.Connected() {
+				return nil, fmt.Errorf("peer disconnected")
+			}
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("no headers response within %s", requestTimeout)
+			}
+		}
 	}
 }
 
-func (s *Syncer) waitCFHeaders() (*wire.MsgCFHeaders, error) {
-	select {
-	case msg := <-s.cfhdrCh:
-		return msg, nil
-	case <-time.After(requestTimeout):
-		return nil, fmt.Errorf("no cfheaders response within %s", requestTimeout)
+func (s *Syncer) waitCFHeaders(p *peer.Peer) (*wire.MsgCFHeaders, error) {
+	var ticker = time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var deadline = time.Now().Add(requestTimeout)
+	for {
+		select {
+		case msg := <-s.cfhdrCh:
+			return msg, nil
+		case <-ticker.C:
+			if !p.Connected() {
+				return nil, fmt.Errorf("peer disconnected")
+			}
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("no cfheaders response within %s", requestTimeout)
+			}
+		}
 	}
 }
 
-func (s *Syncer) waitCFilter() (*wire.MsgCFilter, error) {
-	select {
-	case msg := <-s.fltCh:
-		return msg, nil
-	case <-time.After(requestTimeout):
-		return nil, fmt.Errorf("no cfilter response within %s", requestTimeout)
+func (s *Syncer) waitCFilter(p *peer.Peer) (*wire.MsgCFilter, error) {
+	var ticker = time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var deadline = time.Now().Add(requestTimeout)
+	for {
+		select {
+		case msg := <-s.fltCh:
+			return msg, nil
+		case <-ticker.C:
+			if !p.Connected() {
+				return nil, fmt.Errorf("peer disconnected")
+			}
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("no cfilter response within %s", requestTimeout)
+			}
+		}
 	}
 }
 

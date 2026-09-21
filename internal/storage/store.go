@@ -58,6 +58,11 @@ create table if not exists matches (
 	script    blob    not null,
 	primary key (height, address)
 );
+create table if not exists peers (
+	host text    not null,
+	port integer not null,
+	primary key (host, port)
+);
 `
 
 // Meta is the single wallet metadata row.

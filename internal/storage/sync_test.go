@@ -63,4 +63,14 @@ func TestSyncTables(t *testing.T) {
 	if err != nil || len(addrs) != 1 || addrs[0].Pubkey[2] != 9 {
 		t.Fatalf("Addresses = %+v, %v", addrs, err)
 	}
+	if err := s.SavePeer("10.0.0.1", 8333); err != nil {
+		t.Fatalf("SavePeer: %v", err)
+	}
+	if err := s.SavePeer("10.0.0.1", 8333); err != nil {
+		t.Fatalf("SavePeer again: %v", err)
+	}
+	peers, err := s.Peers()
+	if err != nil || len(peers) != 1 || peers[0].Host != "10.0.0.1" || peers[0].Port != 8333 {
+		t.Fatalf("Peers = %+v, %v", peers, err)
+	}
 }
