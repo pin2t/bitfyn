@@ -254,25 +254,37 @@ func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.
 	if len(resp.FilterHashes) != wantCount {
 		return fmt.Errorf("got %d filter headers for %d blocks", len(resp.FilterHashes), wantCount)
 	}
-	var prev chainhash.Hash
-	if start == 0 {
-		prev = *s.params.GenesisHash
-	} else {
-		var stored, ok, err = s.store.FilterHeaderAt(start - 1)
-		if err != nil { return err }
-		if !ok {
-			return fmt.Errorf("filter header at height %d not stored", start-1)
-		}
-		prev = stored
-	}
-	if resp.PrevFilterHeader != prev {
-		return fmt.Errorf("filter header chain break at %d: prev %s, want %s", start, resp.PrevFilterHeader, prev)
+	if err := s.checkFilterPrev(start, resp.PrevFilterHeader); err != nil {
+		return err
 	}
 	s.pending = make(map[int32]chainhash.Hash, len(resp.FilterHashes))
 	for i, hash := range resp.FilterHashes {
 		s.pending[start+int32(i)] = *hash
 	}
 	return nil
+}
+
+// checkFilterPrev verifies the prev_filter_header of a cfheaders batch
+// against the stored chain. Bitcoin Core and btcd send the null hash for the
+// first batch at height 0; the genesis hash is also accepted there for
+// compatibility with stricter BIP157 readings.
+func (s *Syncer) checkFilterPrev(start int32, got chainhash.Hash) error {
+	var want = chainhash.Hash{}
+	if start > 0 {
+		var stored, ok, err = s.store.FilterHeaderAt(start - 1)
+		if err != nil { return err }
+		if !ok {
+			return fmt.Errorf("filter header at height %d not stored", start-1)
+		}
+		want = stored
+	}
+	if got == want {
+		return nil
+	}
+	if start == 0 && got == *s.params.GenesisHash {
+		return nil
+	}
+	return fmt.Errorf("filter header chain break at %d: prev %s, want %s", start, got, want)
 }
 
 // requestFilters downloads one batch of filters and verifies each against
