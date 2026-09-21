@@ -3,14 +3,22 @@
 
 SPV Bitcoin wallet with a [Fyne](https://fyne.io) GUI, written in Go.
 
-Current milestone: wallet bootstrap —
+Current milestone: SPV sync —
 
 - **HD wallet keys** generated from a BIP39 mnemonic (BIP84, native SegWit),
 - the current **P2WPKH (bech32) receive address** shown as a **QR code in the
   centre of the window** with the address text below it,
 - keys, xpub and derived addresses stored in **SQLite built with SQLCipher**
   (encrypted storage, cgo-based driver),
-- a clipboard icon next to the address to copy it.
+- a clipboard icon next to the address to copy it,
+- **SPV header sync**: the block header chain is downloaded from a P2P peer,
+  validated (proof of work, timestamps, difficulty retarget) and persisted,
+- **BIP158 basic filters**: compact block filters are downloaded, verified
+  against their filter header chain and matched against the wallet scripts;
+  hits are recorded for the later transaction-fetch milestone,
+- **peer failover**: peers are picked at random from the stored peer list and
+  the network DNS seeds; on disconnect or error the sync moves to the next
+  peer, and every learned peer address is persisted in the database.
 
 ## Build
 
@@ -29,6 +37,8 @@ so no system SQLCipher/OpenSSL is needed.
 ./bitfyn -datadir ./data -net mainnet       # custom datadir
 ./bitfyn -dbpass 'your-passphrase'          # encrypted wallet database
 ./bitfyn -check                             # headless smoke check, prints address + writes QR png
+./bitfyn -sync -net testnet                 # headless SPV sync from a DNS seed
+./bitfyn -sync -net testnet -peer 1.2.3.4:18333   # SPV sync from an explicit peer
 ```
 
 Flags:
@@ -39,6 +49,8 @@ Flags:
 | `-net`     | `mainnet`    | `mainnet`, `testnet`, `regtest` or `simnet`      |
 | `-dbpass`  | *(empty)*    | SQLCipher passphrase; empty = unencrypted DB     |
 | `-check`   | `false`      | init wallet, print address, exit (no GUI)        |
+| `-sync`    | `false`      | headless SPV sync: headers + BIP158 filters + match |
+| `-peer`    | *(empty)*    | preferred peer `host:port`; other peers come from the stored list and DNS seeds |
 
 ## Security / encryption notes
 
@@ -55,10 +67,12 @@ Flags:
 ## Layout
 
 ```
-cmd/bitfyn/main.go     CLI flags, headless -check mode
+cmd/bitfyn/main.go     CLI flags, headless -check and -sync modes
 internal/wallet        BIP39/BIP84 HD derivation, P2WPKH addresses
-internal/storage       SQLCipher SQLite store (meta + addresses)
+internal/storage       SQLCipher SQLite store (meta, addresses, headers, filters, matches)
 internal/gui           Fyne window, QR widget, address display
+internal/p2p           P2P peer dialing, handshake, DNS seed resolution
+internal/spv           header chain validation, BIP158 filter sync, script matching
 ```
 
 ## Tests
@@ -103,7 +117,10 @@ the built-in analyzers.
 ## Roadmap
 
 - [x] HD key generation, SegWit addresses, QR display, encrypted SQLite
-- [ ] SPV sync: header chain download + BIP158 compact block filters
+- [x] SPV sync: header chain download + BIP158 compact block filters
 - [ ] Bloom/utxo tracking of wallet addresses, balance and history UI
 - [ ] Spend path: PSBT creation/signing (hardware wallet friendly)
 - [ ] Keyring integration for the database passphrase
+
+The SPV sync is headless for now (`-sync`); showing the sync state in the GUI
+and fetching matched transactions come with the balance/history milestone.
