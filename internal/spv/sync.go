@@ -111,7 +111,12 @@ func (s *Syncer) Listeners() peer.MessageListeners {
 		OnAddr: func(_ *peer.Peer, msg *wire.MsgAddr) {
 			for _, na := range msg.AddrList {
 				if na.IP == nil || na.Port == 0 { continue }
-				_ = s.store.SavePeer(na.IP.String(), na.Port)
+				var ip = na.IP.String()
+				if na.Services != 0 {
+					_ = s.store.UpdatePeerServices(ip, na.Port, uint64(na.Services))
+				} else {
+					_ = s.store.SavePeer(ip, na.Port)
+				}
 			}
 			select {
 			case s.addrCh <- msg:

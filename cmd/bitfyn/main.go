@@ -218,7 +218,7 @@ func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syn
 		conn.Disconnect()
 		conn.WaitForDisconnect()
 	}()
-	var flags = uint64(conn.NA().Services)
+	var flags = uint64(conn.Services())
 	if serr := store.UpsertPeer(storage.Peer{Host: host, Port: port, Services: flags, LatencyMs: handshake.Milliseconds()}); serr != nil {
 		log.Printf("store peer %s: %v", addr, serr)
 	}

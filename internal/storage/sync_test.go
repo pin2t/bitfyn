@@ -81,13 +81,22 @@ func TestSyncTables(t *testing.T) {
 	if err := s.RecordPeerResult("10.0.0.1", 8333, false, 500); err != nil {
 		t.Fatalf("RecordPeerResult: %v", err)
 	}
+	if err := s.UpdatePeerServices("10.0.0.1", 8333, 0x40040); err != nil {
+		t.Fatalf("UpdatePeerServices: %v", err)
+	}
 	peers, err := s.Peers()
 	if err != nil || len(peers) != 1 {
 		t.Fatalf("Peers = %+v, %v", peers, err)
 	}
 	var p = peers[0]
-	if p.Host != "10.0.0.1" || p.Port != 8333 || p.Services != 0x48 || p.LatencyMs != 500 || p.OkCount != 2 || p.FailCount != 1 {
+	if p.Host != "10.0.0.1" || p.Port != 8333 || p.Services != 0x40040 || p.LatencyMs != 500 || p.OkCount != 2 || p.FailCount != 1 {
 		t.Fatalf("unexpected peer row: %+v", p)
+	}
+	if err := s.UpdatePeerServices("10.0.0.3", 18444, 0x48); err != nil {
+		t.Fatalf("UpdatePeerServices new row: %v", err)
+	}
+	if n, err := s.Peers(); err != nil || len(n) != 2 || n[1].Services != 0x48 || n[1].OkCount != 0 {
+		t.Fatalf("Peers after gossip insert = %+v, %v", n, err)
 	}
 }
 

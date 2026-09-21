@@ -192,6 +192,17 @@ func (s *Store) UpsertPeer(p Peer) error {
 	return err
 }
 
+// UpdatePeerServices stores the advertised services of a gossiped peer
+// without touching its latency or request counters.
+func (s *Store) UpdatePeerServices(host string, port uint16, services uint64) error {
+	var _, err = s.db.Exec(
+		`insert into peers (host, port, services) values (?, ?, ?)
+		 on conflict(host, port) do update set services = excluded.services`,
+		host, port, services,
+	)
+	return err
+}
+
 // RecordPeerResult counts one successful or failed request against a peer
 // and stores its round-trip latency in milliseconds.
 func (s *Store) RecordPeerResult(host string, port uint16, ok bool, latencyMs int64) error {
