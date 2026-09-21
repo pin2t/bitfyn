@@ -20,6 +20,9 @@ const (
 // requestTimeout bounds how long a single request may wait for a response.
 const requestTimeout = 90 * time.Second
 
+// addrTimeout bounds the wait for the first addr batch after getaddr.
+const addrTimeout = 5 * time.Second
+
 // Progress reports sync progress: a stage name and the height reached.
 type Progress func(stage string, height int32)
 
@@ -45,6 +48,7 @@ type Syncer struct {
 	hdrCh     chan *wire.MsgHeaders
 	cfhdrCh   chan *wire.MsgCFHeaders
 	fltCh     chan *wire.MsgCFilter
+	addrCh    chan *wire.MsgAddr
 	pending   map[int32]chainhash.Hash
 }
 
@@ -91,7 +95,8 @@ func NewSyncer(params *chaincfg.Params, store *storage.Store, progress Progress)
 	return &Syncer{
 		params: params, store: store, chain: chain, scripts: scripts, progress: progress,
 		hdrCh: make(chan *wire.MsgHeaders, 16), cfhdrCh: make(chan *wire.MsgCFHeaders, 16),
-		fltCh: make(chan *wire.MsgCFilter, 16), pending: make(map[int32]chainhash.Hash),
+		fltCh: make(chan *wire.MsgCFilter, 16), addrCh: make(chan *wire.MsgAddr, 8),
+		pending: make(map[int32]chainhash.Hash),
 	}, nil
 }
 
@@ -108,6 +113,10 @@ func (s *Syncer) Listeners() peer.MessageListeners {
 				if na.IP == nil || na.Port == 0 { continue }
 				_ = s.store.SavePeer(na.IP.String(), na.Port)
 			}
+			select {
+			case s.addrCh <- msg:
+			default:
+			}
 		},
 	}
 }
@@ -117,6 +126,33 @@ func (s *Syncer) Chain() *Chain { return s.chain }
 
 // SetStats binds the request result callback to the peer currently in use.
 func (s *Syncer) SetStats(stats RequestResult) { s.stats = stats }
+
+// RequestAddresses asks the peer for its known node addresses and waits for
+// the first batch. The addresses themselves are persisted by the OnAddr
+// listener. Peers may ignore getaddr, so the result is best effort.
+func (s *Syncer) RequestAddresses(p *peer.Peer) error {
+	s.drainAddr()
+	var started = time.Now()
+	p.QueueMessage(wire.NewMsgGetAddr(), nil)
+	select {
+	case <-s.addrCh:
+		s.record(true, time.Since(started))
+		return nil
+	case <-time.After(addrTimeout):
+		s.record(false, time.Since(started))
+		return fmt.Errorf("no addr response within %s", addrTimeout)
+	}
+}
+
+func (s *Syncer) drainAddr() {
+	for {
+		select {
+		case <-s.addrCh:
+		default:
+			return
+		}
+	}
+}
 
 // SyncHeaders requests missing headers from the peer until its tip is
 // reached, validating and persisting every batch. It returns the new tip

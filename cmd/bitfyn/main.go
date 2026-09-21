@@ -139,11 +139,13 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 	var tip int32
 	var filters int32
 	var lastErr error
-	for _, addr := range candidates {
+	for i := 0; i < len(candidates); i++ {
+		var addr = candidates[i]
 		tip, filters, err = syncFromPeer(net, store, syncer, addr)
 		if err == nil { break }
 		lastErr = err
 		log.Printf("sync via %s failed: %v", addr, err)
+		addLearnedPeers(net, store, &candidates)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("all %d peers failed, last error: %w", len(candidates), lastErr)
@@ -228,11 +230,32 @@ func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syn
 			log.Printf("record peer %s: %v", addr, rerr)
 		}
 	})
+	if aerr := syncer.RequestAddresses(conn); aerr != nil {
+		log.Printf("peer %s: %v", addr, aerr)
+	}
 	var tip, herr = syncer.SyncHeaders(conn)
 	if herr != nil { return 0, 0, fmt.Errorf("headers: %w", herr) }
 	var filters, ferr = syncer.SyncFilters(conn)
 	if ferr != nil { return 0, 0, fmt.Errorf("filters: %w", ferr) }
 	return tip, filters, nil
+}
+
+// addLearnedPeers appends peers discovered from connected peers since the
+// last attempt, so they can be used within the current run too.
+func addLearnedPeers(params *chaincfg.Params, store *storage.Store, candidates *[]string) {
+	var fresh, err = store.Peers()
+	if err != nil { return }
+	var seen = make(map[string]bool)
+	for _, addr := range *candidates {
+		seen[addr] = true
+	}
+	for _, p := range fresh {
+		if p.Services != 0 && p.Services&uint64(wire.SFNodeCF) == 0 { continue }
+		var addr = net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port)))
+		if seen[addr] { continue }
+		seen[addr] = true
+		*candidates = append(*candidates, addr)
+	}
 }
 
 // splitHostPort splits a host:port address into its parts.
