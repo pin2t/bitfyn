@@ -3,6 +3,7 @@ package spv
 import "crypto/sha256"
 import "testing"
 import "github.com/btcsuite/btcd/btcutil/gcs"
+import "github.com/btcsuite/btcd/btcutil/gcs/builder"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 
 // TestMatchScripts builds a BIP158 basic filter with the reference
@@ -37,5 +38,34 @@ func TestFilterHash(t *testing.T) {
 	var want = sha256.Sum256(first[:])
 	if got := filterHash(data); got != chainhash.Hash(want) {
 		t.Fatalf("filterHash = %x, want %x", got, want)
+	}
+}
+
+// TestFilterHeader checks the chained filter header definition against the
+// btcutil reference implementation, including the null genesis predecessor.
+func TestFilterHeader(t *testing.T) {
+	var key = [16]byte{9, 9, 9}
+	var filter, err = gcs.BuildGCSFilter(gcsP, gcsM, key, [][]byte{{0x00, 0x14}})
+	if err != nil {
+		t.Fatalf("build filter: %v", err)
+	}
+	var raw, err2 = builder.GetFilterHash(filter)
+	if err2 != nil {
+		t.Fatalf("GetFilterHash: %v", err2)
+	}
+	var prev = chainhash.Hash{1, 2, 3}
+	var want, err3 = builder.MakeHeaderForFilter(filter, prev)
+	if err3 != nil {
+		t.Fatalf("MakeHeaderForFilter: %v", err3)
+	}
+	if got := filterHeader(raw, prev); got != want {
+		t.Fatalf("filterHeader = %x, want %x", got, want)
+	}
+	var wantZero, err4 = builder.MakeHeaderForFilter(filter, chainhash.Hash{})
+	if err4 != nil {
+		t.Fatalf("MakeHeaderForFilter zero: %v", err4)
+	}
+	if got := filterHeader(raw, chainhash.Hash{}); got != wantZero {
+		t.Fatalf("genesis filterHeader = %x, want %x", got, wantZero)
 	}
 }

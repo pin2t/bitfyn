@@ -130,3 +130,36 @@ func TestAddPeerColumns(t *testing.T) {
 		t.Fatalf("Peers after migration = %+v, %v", peers, err)
 	}
 }
+
+// TestUpgradeFilterHeaders checks that filters stored under the old raw-hash
+// scheme are cleared once and the schema version is stamped.
+func TestUpgradeFilterHeaders(t *testing.T) {
+	var path = filepath.Join(t.TempDir(), "f.db")
+	var s, err = Open(path, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	var inserts = []string{
+		`insert into cfilters (height, blockHash, filterHeader, filterData) values (7, x'11', x'22', x'33')`,
+		`pragma user_version = 0`,
+	}
+	for _, query := range inserts {
+		if _, err := s.db.Exec(query); err != nil {
+			t.Fatalf("%q: %v", query, err)
+		}
+	}
+	if err := upgradeFilterHeaders(s.db); err != nil {
+		t.Fatalf("upgradeFilterHeaders: %v", err)
+	}
+	if n, err := s.FilterCount(); err != nil || n != 0 {
+		t.Fatalf("FilterCount after upgrade = %d, %v; want 0", n, err)
+	}
+	var version int
+	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != 2 {
+		t.Fatalf("user_version = %d, %v; want 2", version, err)
+	}
+	if err := upgradeFilterHeaders(s.db); err != nil {
+		t.Fatalf("upgradeFilterHeaders again: %v", err)
+	}
+}

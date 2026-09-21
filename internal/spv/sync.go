@@ -265,9 +265,9 @@ func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.
 }
 
 // checkFilterPrev verifies the prev_filter_header of a cfheaders batch
-// against the stored chain. Bitcoin Core and btcd send the null hash for the
-// first batch at height 0; the genesis hash is also accepted there for
-// compatibility with stricter BIP157 readings.
+// against the stored chain of chained filter headers. Bitcoin Core and btcd
+// send the null hash for the first batch at height 0; the genesis hash is
+// also accepted there for compatibility with stricter BIP157 readings.
 func (s *Syncer) checkFilterPrev(start int32, got chainhash.Hash) error {
 	var want = chainhash.Hash{}
 	if start > 0 {
@@ -309,8 +309,9 @@ func (s *Syncer) requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) 
 	return nil
 }
 
-// storeFilter verifies one downloaded filter and stores it, recording any
-// wallet script it matches.
+// storeFilter verifies one downloaded filter against the cfheaders hash and
+// stores it with its chained filter header, recording any wallet script it
+// matches.
 func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
 	if msg.FilterType != wire.GCSFilterRegular {
 		return fmt.Errorf("unexpected filter type %d", msg.FilterType)
@@ -319,11 +320,20 @@ func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
 	if height < 0 {
 		return fmt.Errorf("cfilter for unknown block %s", msg.BlockHash)
 	}
-	var want = s.pending[height]
-	var got = filterHash(msg.Data)
-	if got != want {
-		return fmt.Errorf("filter at height %d hashes to %s, want %s", height, got, want)
+	var raw = filterHash(msg.Data)
+	if raw != s.pending[height] {
+		return fmt.Errorf("filter at height %d hashes to %s, want %s", height, raw, s.pending[height])
 	}
+	var prev = chainhash.Hash{}
+	if height > 0 {
+		var stored, ok, err = s.store.FilterHeaderAt(height - 1)
+		if err != nil { return err }
+		if !ok {
+			return fmt.Errorf("filter header at height %d not stored", height-1)
+		}
+		prev = stored
+	}
+	var header = filterHeader(raw, prev)
 	var scripts = make([][]byte, len(s.scripts))
 	for i, w := range s.scripts {
 		scripts[i] = w.script
@@ -332,7 +342,7 @@ func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
 	if err != nil {
 		return fmt.Errorf("match filter at height %d: %w", height, err)
 	}
-	if err := s.store.SaveFilter(storage.Filter{Height: height, BlockHash: msg.BlockHash, FilterHeader: got, Data: msg.Data}); err != nil {
+	if err := s.store.SaveFilter(storage.Filter{Height: height, BlockHash: msg.BlockHash, FilterHeader: header, Data: msg.Data}); err != nil {
 		return fmt.Errorf("store filter at height %d: %w", height, err)
 	}
 	for i, hit := range hits {

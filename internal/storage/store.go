@@ -111,10 +111,34 @@ func Open(path, passphrase string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// filterHeaderVersion marks the schema revision that switched the stored
+// filter headers from raw filter hashes to chained filter headers. Older rows
+// are discarded on open because they cannot be used for linkage verification.
+const filterHeaderVersion = 2
+
 func migrate(db *sql.DB) error {
 	var _, err = db.Exec(schema)
 	if err != nil { return err }
-	return addPeerColumns(db)
+	if err := addPeerColumns(db); err != nil { return err }
+	return upgradeFilterHeaders(db)
+}
+
+// upgradeFilterHeaders clears filter rows stored under the old raw-hash
+// scheme and stamps the schema version, once per database.
+func upgradeFilterHeaders(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`pragma user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version < filterHeaderVersion {
+		if _, err := db.Exec(`delete from cfilters`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, filterHeaderVersion)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // addPeerColumns adds the peer statistics columns to databases created
