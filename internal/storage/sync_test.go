@@ -69,8 +69,55 @@ func TestSyncTables(t *testing.T) {
 	if err := s.SavePeer("10.0.0.1", 8333); err != nil {
 		t.Fatalf("SavePeer again: %v", err)
 	}
+	if err := s.UpsertPeer(Peer{Host: "10.0.0.1", Port: 8333, Services: 0x48, LatencyMs: 120}); err != nil {
+		t.Fatalf("UpsertPeer: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, true, 80); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, true, 90); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, false, 500); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
 	peers, err := s.Peers()
-	if err != nil || len(peers) != 1 || peers[0].Host != "10.0.0.1" || peers[0].Port != 8333 {
+	if err != nil || len(peers) != 1 {
 		t.Fatalf("Peers = %+v, %v", peers, err)
+	}
+	var p = peers[0]
+	if p.Host != "10.0.0.1" || p.Port != 8333 || p.Services != 0x48 || p.LatencyMs != 500 || p.OkCount != 2 || p.FailCount != 1 {
+		t.Fatalf("unexpected peer row: %+v", p)
+	}
+}
+
+// TestAddPeerColumns checks that a database with the old two-column peers
+// table gains the statistics columns without losing its rows.
+func TestAddPeerColumns(t *testing.T) {
+	var path = filepath.Join(t.TempDir(), "old.db")
+	var s, err = Open(path, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	var drops = []string{
+		`drop table peers`,
+		`create table peers (host text not null, port integer not null, primary key (host, port))`,
+		`insert into peers (host, port) values ('10.0.0.2', 18333)`,
+	}
+	for _, query := range drops {
+		if _, err := s.db.Exec(query); err != nil {
+			t.Fatalf("%q: %v", query, err)
+		}
+	}
+	if err := addPeerColumns(s.db); err != nil {
+		t.Fatalf("addPeerColumns: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.2", 18333, true, 42); err != nil {
+		t.Fatalf("RecordPeerResult on migrated table: %v", err)
+	}
+	peers, err := s.Peers()
+	if err != nil || len(peers) != 1 || peers[0].OkCount != 1 || peers[0].LatencyMs != 42 {
+		t.Fatalf("Peers after migration = %+v, %v", peers, err)
 	}
 }

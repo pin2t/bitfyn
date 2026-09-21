@@ -28,17 +28,20 @@ func (a PeerAddr) String() string {
 
 // Dial connects to the given peer address and completes the version/verack
 // handshake, leaving the peer ready for message exchange. The listeners are
-// installed before the connection starts so no early message is missed.
-func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, error) {
+// installed before the connection starts so no early message is missed. The
+// returned duration is the full handshake latency, dial included. The local
+// peer advertises no services: it is a light client.
+func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
+	var started = time.Now()
 	var conn, err = net.DialTimeout("tcp", address, HandshakeTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("dial peer %s: %w", address, err)
+		return nil, 0, fmt.Errorf("dial peer %s: %w", address, err)
 	}
 	var cfg = &peer.Config{
 		UserAgentName:       "bitfyn",
 		UserAgentVersion:    "0.1.0",
 		ChainParams:         params,
-		Services:            wire.SFNodeNetwork | wire.SFNodeWitness,
+		Services:            0,
 		ProtocolVersion:     wire.FeeFilterVersion,
 		DisableRelayTx:      true,
 		DisableStallHandler: true,
@@ -47,13 +50,13 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 	p, err := peer.NewOutboundPeer(cfg, address)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("create peer: %w", err)
+		return nil, 0, fmt.Errorf("create peer: %w", err)
 	}
 	p.AssociateConnection(conn)
 	var deadline = time.Now().Add(HandshakeTimeout)
 	for time.Now().Before(deadline) {
 		if p.VerAckReceived() {
-			return p, nil
+			return p, time.Since(started), nil
 		}
 		if !p.Connected() {
 			break
@@ -62,7 +65,7 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 	}
 	p.Disconnect()
 	p.WaitForDisconnect()
-	return nil, fmt.Errorf("handshake with %s timed out", address)
+	return nil, 0, fmt.Errorf("handshake with %s timed out", address)
 }
 
 // Seeds resolves every IP address advertised by the network's DNS seeds.
@@ -80,12 +83,18 @@ func Seeds(params *chaincfg.Params) []PeerAddr {
 			{"dnsseed.bluematt.me", 8333},
 			{"dnsseed.bitcoin.dashjr.org", 8333},
 			{"seed.bitcoin.jonasschnelli.ch", 8333},
+			{"bitcoin.sprovoost.nl", 8333},
+			{"dnsseed.emzy.de", 8333},
+			{"seed.bitcoin.wiz.biz", 8333},
+			{"seed.bitcoinstats.com", 8333},
 		}
 	case chaincfg.TestNet3Params.Net:
 		seeds = []seedHost{
 			{"testnet-seed.bitcoin.jonasschnelli.ch", 18333},
 			{"seed.tbtc.petertodd.org", 18333},
 			{"testnet-seed.bluematt.me", 18333},
+			{"testnet-seed.bitcoin.sprovoost.nl", 18333},
+			{"testnet-seed.bitcoin.wiz.biz", 18333},
 		}
 	default:
 		return nil

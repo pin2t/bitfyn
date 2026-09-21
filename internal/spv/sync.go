@@ -23,6 +23,10 @@ const requestTimeout = 90 * time.Second
 // Progress reports sync progress: a stage name and the height reached.
 type Progress func(stage string, height int32)
 
+// RequestResult reports the outcome of one peer request: ok and the
+// round-trip latency.
+type RequestResult func(ok bool, latency time.Duration)
+
 // watchScript is one wallet output script kept for filter matching.
 type watchScript struct {
 	address string
@@ -37,6 +41,7 @@ type Syncer struct {
 	chain     *Chain
 	scripts   []watchScript
 	progress  Progress
+	stats     RequestResult
 	hdrCh     chan *wire.MsgHeaders
 	cfhdrCh   chan *wire.MsgCFHeaders
 	fltCh     chan *wire.MsgCFilter
@@ -110,6 +115,9 @@ func (s *Syncer) Listeners() peer.MessageListeners {
 // Chain exposes the validated header chain.
 func (s *Syncer) Chain() *Chain { return s.chain }
 
+// SetStats binds the request result callback to the peer currently in use.
+func (s *Syncer) SetStats(stats RequestResult) { s.stats = stats }
+
 // SyncHeaders requests missing headers from the peer until its tip is
 // reached, validating and persisting every batch. It returns the new tip
 // height.
@@ -118,8 +126,10 @@ func (s *Syncer) SyncHeaders(p *peer.Peer) (int32, error) {
 		var msg = wire.NewMsgGetHeaders()
 		msg.ProtocolVersion = p.ProtocolVersion()
 		msg.BlockLocatorHashes = s.chain.Locator()
+		var started = time.Now()
 		p.QueueMessage(msg, nil)
 		var batch, err = s.waitHeaders(p)
+		s.record(err == nil, time.Since(started))
 		if err != nil { return s.chain.Height(), err }
 		if len(batch) == 0 { break }
 		if err := s.extendHeaders(batch); err != nil {
@@ -188,8 +198,10 @@ func (s *Syncer) extendHeaders(batch []*wire.BlockHeader) error {
 // batch, keeping the headers pending until their filters are downloaded.
 func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.Hash) error {
 	var msg = wire.NewMsgGetCFHeaders(wire.GCSFilterRegular, uint32(start), &stop)
+	var started = time.Now()
 	p.QueueMessage(msg, nil)
 	var resp, err = s.waitCFHeaders(p)
+	s.record(err == nil, time.Since(started))
 	if err != nil { return err }
 	if resp.FilterType != wire.GCSFilterRegular {
 		return fmt.Errorf("unexpected filter type %d", resp.FilterType)
@@ -226,13 +238,21 @@ func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.
 // its filter header and the block hash at the same height.
 func (s *Syncer) requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) error {
 	var msg = wire.NewMsgGetCFilters(wire.GCSFilterRegular, uint32(start), &stop)
+	var started = time.Now()
 	p.QueueMessage(msg, nil)
 	var expected = s.chain.HeightOf(stop) - start + 1
 	for range expected {
 		var resp, err = s.waitCFilter(p)
-		if err != nil { return err }
-		if err := s.storeFilter(resp); err != nil { return err }
+		if err != nil {
+			s.record(false, time.Since(started))
+			return err
+		}
+		if err := s.storeFilter(resp); err != nil {
+			s.record(false, time.Since(started))
+			return err
+		}
 	}
+	s.record(true, time.Since(started))
 	return nil
 }
 
@@ -332,6 +352,12 @@ func (s *Syncer) waitCFilter(p *peer.Peer) (*wire.MsgCFilter, error) {
 func (s *Syncer) report(stage string, height int32) {
 	if s.progress != nil {
 		s.progress(stage, height)
+	}
+}
+
+func (s *Syncer) record(ok bool, latency time.Duration) {
+	if s.stats != nil {
+		s.stats(ok, latency)
 	}
 }
 

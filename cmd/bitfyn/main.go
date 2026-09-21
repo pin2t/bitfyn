@@ -12,6 +12,7 @@ import "path/filepath"
 import "strconv"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg"
+import "github.com/btcsuite/btcd/wire"
 import "github.com/skip2/go-qrcode"
 import "bitfyn/internal/gui"
 import "bitfyn/internal/p2p"
@@ -161,6 +162,7 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 
 // syncPeers builds the ordered list of peers to try: the explicit address
 // first when given, then stored and freshly discovered peers in random order.
+// Stored peers that are known not to serve compact filters are skipped.
 func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) ([]string, error) {
 	var list []string
 	var seen = make(map[string]bool)
@@ -180,6 +182,7 @@ func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) (
 	var stored, err = store.Peers()
 	if err != nil { return nil, err }
 	for _, p := range stored {
+		if p.Services != 0 && p.Services&uint64(wire.SFNodeCF) == 0 { continue }
 		add(net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
 	}
 	for _, seed := range p2p.Seeds(params) {
@@ -194,22 +197,37 @@ func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) (
 	return list, nil
 }
 
-// syncFromPeer dials one peer and runs the header and filter sync on it,
-// storing the peer address for future runs.
+// syncFromPeer dials one peer and runs the header and filter sync on it.
+// The advertised services and the handshake latency are stored on connect,
+// every request outcome and latency is recorded, and a peer without the
+// compact filters service is rejected before any request is made.
 func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, addr string) (int32, int32, error) {
 	log.Printf("syncing from %s", addr)
-	var conn, err = p2p.Dial(params, addr, syncer.Listeners())
-	if err != nil { return 0, 0, err }
+	var host, port, perr = splitHostPort(addr)
+	if perr != nil { return 0, 0, perr }
+	var conn, handshake, err = p2p.Dial(params, addr, syncer.Listeners())
+	if err != nil {
+		if rerr := store.RecordPeerResult(host, port, false, 0); rerr != nil {
+			log.Printf("record peer %s: %v", addr, rerr)
+		}
+		return 0, 0, err
+	}
 	defer func() {
 		conn.Disconnect()
 		conn.WaitForDisconnect()
 	}()
-	var host, port, perr = splitHostPort(addr)
-	if perr == nil {
-		if serr := store.SavePeer(host, port); serr != nil {
-			log.Printf("store peer %s: %v", addr, serr)
-		}
+	var flags = uint64(conn.NA().Services)
+	if serr := store.UpsertPeer(storage.Peer{Host: host, Port: port, Services: flags, LatencyMs: handshake.Milliseconds()}); serr != nil {
+		log.Printf("store peer %s: %v", addr, serr)
 	}
+	if flags&uint64(wire.SFNodeCF) == 0 {
+		return 0, 0, fmt.Errorf("peer does not advertise compact filters")
+	}
+	syncer.SetStats(func(ok bool, latency time.Duration) {
+		if rerr := store.RecordPeerResult(host, port, ok, latency.Milliseconds()); rerr != nil {
+			log.Printf("record peer %s: %v", addr, rerr)
+		}
+	})
 	var tip, herr = syncer.SyncHeaders(conn)
 	if herr != nil { return 0, 0, fmt.Errorf("headers: %w", herr) }
 	var filters, ferr = syncer.SyncFilters(conn)

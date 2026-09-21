@@ -59,8 +59,12 @@ create table if not exists matches (
 	primary key (height, address)
 );
 create table if not exists peers (
-	host text    not null,
-	port integer not null,
+	host      text    not null,
+	port      integer not null,
+	services  integer not null default 0,
+	latencyMs integer not null default 0,
+	okCount   integer not null default 0,
+	failCount integer not null default 0,
 	primary key (host, port)
 );
 `
@@ -109,7 +113,43 @@ func Open(path, passphrase string) (*Store, error) {
 
 func migrate(db *sql.DB) error {
 	var _, err = db.Exec(schema)
-	return err
+	if err != nil { return err }
+	return addPeerColumns(db)
+}
+
+// addPeerColumns adds the peer statistics columns to databases created
+// before they existed, keeping old wallets usable.
+func addPeerColumns(db *sql.DB) error {
+	var existing = make(map[string]bool)
+	var rows, err = db.Query(`pragma table_info(peers)`)
+	if err != nil { return err }
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var kind string
+		var notnull int
+		var def []byte
+		var pk int
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil { return err }
+	for _, column := range []string{
+		`services integer not null default 0`,
+		`latencyMs integer not null default 0`,
+		`okCount integer not null default 0`,
+		`failCount integer not null default 0`,
+	} {
+		var name = strings.SplitN(column, " ", 2)[0]
+		if existing[name] { continue }
+		if _, err := db.Exec(`alter table peers add column ` + column); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
