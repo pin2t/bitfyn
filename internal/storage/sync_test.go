@@ -69,8 +69,97 @@ func TestSyncTables(t *testing.T) {
 	if err := s.SavePeer("10.0.0.1", 8333); err != nil {
 		t.Fatalf("SavePeer again: %v", err)
 	}
+	if err := s.UpsertPeer(Peer{Host: "10.0.0.1", Port: 8333, Services: 0x48, LatencyMs: 120}); err != nil {
+		t.Fatalf("UpsertPeer: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, true, 80); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, true, 90); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.1", 8333, false, 500); err != nil {
+		t.Fatalf("RecordPeerResult: %v", err)
+	}
+	if err := s.UpdatePeerServices("10.0.0.1", 8333, 0x40040); err != nil {
+		t.Fatalf("UpdatePeerServices: %v", err)
+	}
 	peers, err := s.Peers()
-	if err != nil || len(peers) != 1 || peers[0].Host != "10.0.0.1" || peers[0].Port != 8333 {
+	if err != nil || len(peers) != 1 {
 		t.Fatalf("Peers = %+v, %v", peers, err)
+	}
+	var p = peers[0]
+	if p.Host != "10.0.0.1" || p.Port != 8333 || p.Services != 0x40040 || p.LatencyMs != 500 || p.OkCount != 2 || p.FailCount != 1 {
+		t.Fatalf("unexpected peer row: %+v", p)
+	}
+	if err := s.UpdatePeerServices("10.0.0.3", 18444, 0x48); err != nil {
+		t.Fatalf("UpdatePeerServices new row: %v", err)
+	}
+	if n, err := s.Peers(); err != nil || len(n) != 2 || n[1].Services != 0x48 || n[1].OkCount != 0 {
+		t.Fatalf("Peers after gossip insert = %+v, %v", n, err)
+	}
+}
+
+// TestAddPeerColumns checks that a database with the old two-column peers
+// table gains the statistics columns without losing its rows.
+func TestAddPeerColumns(t *testing.T) {
+	var path = filepath.Join(t.TempDir(), "old.db")
+	var s, err = Open(path, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	var drops = []string{
+		`drop table peers`,
+		`create table peers (host text not null, port integer not null, primary key (host, port))`,
+		`insert into peers (host, port) values ('10.0.0.2', 18333)`,
+	}
+	for _, query := range drops {
+		if _, err := s.db.Exec(query); err != nil {
+			t.Fatalf("%q: %v", query, err)
+		}
+	}
+	if err := addPeerColumns(s.db); err != nil {
+		t.Fatalf("addPeerColumns: %v", err)
+	}
+	if err := s.RecordPeerResult("10.0.0.2", 18333, true, 42); err != nil {
+		t.Fatalf("RecordPeerResult on migrated table: %v", err)
+	}
+	peers, err := s.Peers()
+	if err != nil || len(peers) != 1 || peers[0].OkCount != 1 || peers[0].LatencyMs != 42 {
+		t.Fatalf("Peers after migration = %+v, %v", peers, err)
+	}
+}
+
+// TestUpgradeFilterHeaders checks that filters stored under the old raw-hash
+// scheme are cleared once and the schema version is stamped.
+func TestUpgradeFilterHeaders(t *testing.T) {
+	var path = filepath.Join(t.TempDir(), "f.db")
+	var s, err = Open(path, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	var inserts = []string{
+		`insert into cfilters (height, blockHash, filterHeader, filterData) values (7, x'11', x'22', x'33')`,
+		`pragma user_version = 0`,
+	}
+	for _, query := range inserts {
+		if _, err := s.db.Exec(query); err != nil {
+			t.Fatalf("%q: %v", query, err)
+		}
+	}
+	if err := upgradeFilterHeaders(s.db); err != nil {
+		t.Fatalf("upgradeFilterHeaders: %v", err)
+	}
+	if n, err := s.FilterCount(); err != nil || n != 0 {
+		t.Fatalf("FilterCount after upgrade = %d, %v; want 0", n, err)
+	}
+	var version int
+	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != 2 {
+		t.Fatalf("user_version = %d, %v; want 2", version, err)
+	}
+	if err := upgradeFilterHeaders(s.db); err != nil {
+		t.Fatalf("upgradeFilterHeaders again: %v", err)
 	}
 }

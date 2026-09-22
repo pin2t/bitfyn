@@ -39,10 +39,14 @@ type StoredAddress struct {
 	Pubkey  []byte
 }
 
-// Peer is one known network peer address.
+// Peer is one known network peer with its connection statistics.
 type Peer struct {
-	Host string
-	Port uint16
+	Host      string
+	Port      uint16
+	Services  uint64
+	LatencyMs int64
+	OkCount   int64
+	FailCount int64
 }
 
 // SaveHeader persists one validated header, replacing any row at the height.
@@ -177,9 +181,46 @@ func (s *Store) SavePeer(host string, port uint16) error {
 	return err
 }
 
-// Peers returns every known peer address.
+// UpsertPeer stores the advertised services and the last measured latency of
+// a connected peer, creating the row when needed.
+func (s *Store) UpsertPeer(p Peer) error {
+	var _, err = s.db.Exec(
+		`insert into peers (host, port, services, latencyMs, okCount, failCount) values (?, ?, ?, ?, 0, 0)
+		 on conflict(host, port) do update set services = excluded.services, latencyMs = excluded.latencyMs`,
+		p.Host, p.Port, p.Services, p.LatencyMs,
+	)
+	return err
+}
+
+// UpdatePeerServices stores the advertised services of a gossiped peer
+// without touching its latency or request counters.
+func (s *Store) UpdatePeerServices(host string, port uint16, services uint64) error {
+	var _, err = s.db.Exec(
+		`insert into peers (host, port, services) values (?, ?, ?)
+		 on conflict(host, port) do update set services = excluded.services`,
+		host, port, services,
+	)
+	return err
+}
+
+// RecordPeerResult counts one successful or failed request against a peer
+// and stores its round-trip latency in milliseconds.
+func (s *Store) RecordPeerResult(host string, port uint16, ok bool, latencyMs int64) error {
+	var okCount = int64(0)
+	var failCount = int64(0)
+	if ok { okCount = 1 } else { failCount = 1 }
+	var _, err = s.db.Exec(
+		`insert into peers (host, port, latencyMs, okCount, failCount) values (?, ?, ?, ?, ?)
+		 on conflict(host, port) do update set latencyMs = excluded.latencyMs,
+		 okCount = okCount + excluded.okCount, failCount = failCount + excluded.failCount`,
+		host, port, latencyMs, okCount, failCount,
+	)
+	return err
+}
+
+// Peers returns every known peer with its statistics.
 func (s *Store) Peers() ([]Peer, error) {
-	var rows, err = s.db.Query(`select host, port from peers`)
+	var rows, err = s.db.Query(`select host, port, services, latencyMs, okCount, failCount from peers`)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +228,7 @@ func (s *Store) Peers() ([]Peer, error) {
 	var out []Peer
 	for rows.Next() {
 		var p Peer
-		if err := rows.Scan(&p.Host, &p.Port); err != nil {
+		if err := rows.Scan(&p.Host, &p.Port, &p.Services, &p.LatencyMs, &p.OkCount, &p.FailCount); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

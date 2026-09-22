@@ -18,7 +18,10 @@ Current milestone: SPV sync —
   hits are recorded for the later transaction-fetch milestone,
 - **peer failover**: peers are picked at random from the stored peer list and
   the network DNS seeds; on disconnect or error the sync moves to the next
-  peer, and every learned peer address is persisted in the database.
+  peer. The client advertises no services, skips peers without the compact
+  filters service, and records per peer the advertised flags, handshake and
+  request latency, and the count of successful and failed requests in the
+  database.
 
 ## Build
 

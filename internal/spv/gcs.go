@@ -20,10 +20,22 @@ func filterKey(blockHash *chainhash.Hash) [16]byte {
 	return key
 }
 
-// filterHash is the double SHA256 commitment of a serialized filter, which
-// peers return in cfheaders messages.
+// filterHash is the double SHA256 of a serialized filter, the value peers
+// send in the cfheaders filter_hashes list and use to commit to the filter
+// data.
 func filterHash(data []byte) chainhash.Hash {
 	var first = sha256.Sum256(data)
+	return chainhash.Hash(sha256.Sum256(first[:]))
+}
+
+// filterHeader chains a raw filter hash to the previous filter header:
+// SHA256d(raw || prev), per BIP157. The genesis filter chains to the null
+// hash. This is the value peers send as cfheaders.prev_filter_header.
+func filterHeader(raw, prev chainhash.Hash) chainhash.Hash {
+	var buf [64]byte
+	copy(buf[:32], raw[:])
+	copy(buf[32:], prev[:])
+	var first = sha256.Sum256(buf[:])
 	return chainhash.Hash(sha256.Sum256(first[:]))
 }
 
