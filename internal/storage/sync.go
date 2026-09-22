@@ -97,13 +97,53 @@ func (s *Store) DeleteHeadersFrom(height int32) error {
 	return err
 }
 
-// SaveFilter persists one verified BIP158 basic filter.
+// DeleteFiltersFrom removes every stored filter row above the given height.
+// It keeps the header chain and filter rows consistent when a shallow fork is
+// rewound.
+func (s *Store) DeleteFiltersFrom(height int32) error {
+	var _, err = s.db.Exec(`delete from cfilters where height > ?`, height)
+	return err
+}
+
+// SaveFilter persists one verified BIP158 basic filter. When Data is nil the
+// row stores only the chained header, which is the pruned state.
 func (s *Store) SaveFilter(f Filter) error {
 	var _, err = s.db.Exec(
 		`insert or replace into cfilters (height, blockHash, filterHeader, filterData) values (?, ?, ?, ?)`,
 		f.Height, f.BlockHash[:], f.FilterHeader[:], f.Data,
 	)
 	return err
+}
+
+// PruneFilterData drops the filter data at the given height, leaving only the
+// chained header that links the filter header chain.
+func (s *Store) PruneFilterData(height int32) error {
+	var _, err = s.db.Exec(`update cfilters set filterData = null where height = ?`, height)
+	return err
+}
+
+// PruneFilterDataFrom drops any filter data kept at or above the given
+// height. It cleans up rows that were downloaded but not pruned before a
+// crash; synced rows keep their chained headers.
+func (s *Store) PruneFilterDataFrom(height int32) error {
+	var _, err = s.db.Exec(`update cfilters set filterData = null where height >= ? and filterData is not null`, height)
+	return err
+}
+
+// FilterResumeHeight returns the height at which the next filter download
+// must start: one past the highest stored filter row at or after from. Stored
+// rows are contiguous from the wallet seed height, so the first missing
+// height is the resume point.
+func (s *Store) FilterResumeHeight(from int32) (int32, error) {
+	var highest sql.NullInt64
+	var err = s.db.QueryRow(`select max(height) from cfilters where height >= ?`, from).Scan(&highest)
+	if err != nil {
+		return 0, err
+	}
+	if !highest.Valid || int32(highest.Int64) < from {
+		return from, nil
+	}
+	return int32(highest.Int64) + 1, nil
 }
 
 // FilterHeaderAt returns the stored filter header at the height, if any.

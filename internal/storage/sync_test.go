@@ -45,6 +45,31 @@ func TestSyncTables(t *testing.T) {
 	if n, err := s.FilterCount(); err != nil || n != 1 {
 		t.Fatalf("FilterCount = %d, %v; want 1", n, err)
 	}
+	if err := s.PruneFilterData(0); err != nil {
+		t.Fatalf("PruneFilterData: %v", err)
+	}
+	header, ok, err = s.FilterHeaderAt(0)
+	if err != nil || !ok || header != f0.FilterHeader {
+		t.Fatalf("FilterHeaderAt(0) after prune = %s, %v, %v", header, ok, err)
+	}
+	if n, err := s.FilterResumeHeight(0); err != nil || n != 1 {
+		t.Fatalf("FilterResumeHeight(0) = %d, %v; want 1", n, err)
+	}
+	if err := s.SaveFilter(Filter{Height: 1, BlockHash: chainhash.Hash{7}, FilterHeader: chainhash.Hash{8}}); err != nil {
+		t.Fatalf("SaveFilter header-only: %v", err)
+	}
+	if n, err := s.FilterResumeHeight(0); err != nil || n != 2 {
+		t.Fatalf("FilterResumeHeight(0) after header-only row = %d, %v; want 2", n, err)
+	}
+	if err := s.PruneFilterDataFrom(0); err != nil {
+		t.Fatalf("PruneFilterDataFrom: %v", err)
+	}
+	if err := s.DeleteFiltersFrom(0); err != nil {
+		t.Fatalf("DeleteFiltersFrom: %v", err)
+	}
+	if n, err := s.FilterResumeHeight(0); err != nil || n != 1 {
+		t.Fatalf("FilterResumeHeight(0) after delete = %d, %v; want 1", n, err)
+	}
 	var m = Match{Height: 5, BlockHash: chainhash.Hash{6}, Address: "bc1qtest", Script: []byte{0x51}}
 	if err := s.SaveMatch(m); err != nil {
 		t.Fatalf("SaveMatch: %v", err)
@@ -131,9 +156,10 @@ func TestAddPeerColumns(t *testing.T) {
 	}
 }
 
-// TestUpgradeFilterHeaders checks that filters stored under the old raw-hash
-// scheme are cleared once and the schema version is stamped.
-func TestUpgradeFilterHeaders(t *testing.T) {
+// TestUpgradeSchema checks that filters stored under the old scheme are
+// cleared once, the cfilters table is rebuilt with a nullable filterData
+// column, and the schema version is stamped.
+func TestUpgradeSchema(t *testing.T) {
 	var path = filepath.Join(t.TempDir(), "f.db")
 	var s, err = Open(path, "")
 	if err != nil {
@@ -149,17 +175,26 @@ func TestUpgradeFilterHeaders(t *testing.T) {
 			t.Fatalf("%q: %v", query, err)
 		}
 	}
-	if err := upgradeFilterHeaders(s.db); err != nil {
-		t.Fatalf("upgradeFilterHeaders: %v", err)
+	if err := upgradeSchema(s.db); err != nil {
+		t.Fatalf("upgradeSchema: %v", err)
 	}
 	if n, err := s.FilterCount(); err != nil || n != 0 {
 		t.Fatalf("FilterCount after upgrade = %d, %v; want 0", n, err)
 	}
 	var version int
-	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != 2 {
-		t.Fatalf("user_version = %d, %v; want 2", version, err)
+	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != filterPruneVersion {
+		t.Fatalf("user_version = %d, %v; want %d", version, err, filterPruneVersion)
 	}
-	if err := upgradeFilterHeaders(s.db); err != nil {
-		t.Fatalf("upgradeFilterHeaders again: %v", err)
+	if err := upgradeSchema(s.db); err != nil {
+		t.Fatalf("upgradeSchema again: %v", err)
+	}
+	if err := s.SaveFilter(Filter{Height: 9, BlockHash: chainhash.Hash{1}, FilterHeader: chainhash.Hash{2}}); err != nil {
+		t.Fatalf("SaveFilter with nil data after rebuild: %v", err)
+	}
+	if err := s.PruneFilterData(9); err != nil {
+		t.Fatalf("PruneFilterData after rebuild: %v", err)
+	}
+	if n, err := s.FilterResumeHeight(0); err != nil || n != 10 {
+		t.Fatalf("FilterResumeHeight after header-only row = %d, %v; want 10", n, err)
 	}
 }
