@@ -7,10 +7,8 @@ import "github.com/btcsuite/btcd/chaincfg/chainhash"
 
 // BIP158 basic filter parameters: Golomb-Rice P and the false positive rate
 // target M, matching the basic filter type deployed on the network.
-const (
-	gcsP = 19
-	gcsM = 784931
-)
+const gcsP = 19
+const gcsM = 784931
 
 // filterKey is the 16-byte siphash key of a block's basic filter: the first
 // half of the block hash, per BIP158.

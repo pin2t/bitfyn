@@ -118,10 +118,8 @@ func Open(path, passphrase string) (*Store, error) {
 // downloaded filter can be pruned, keeping only its chained header. The
 // cfilters table is rebuilt and rows are dropped because filters are
 // re-downloadable from peers and old rows predate the seed-start sync.
-const (
-	filterHeaderVersion = 2
-	filterPruneVersion  = 3
-)
+const filterHeaderVersion = 2
+const filterPruneVersion = 3
 
 func migrate(db *sql.DB) error {
 	var _, err = db.Exec(schema)

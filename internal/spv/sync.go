@@ -12,11 +12,9 @@ import "bitfyn/internal/storage"
 
 // headerBatch and filterHeaderBatch bound a single request per the protocol
 // limits; filterBatch is the smaller limit for full filters.
-const (
-	headerBatch       = 2000
-	filterHeaderBatch = 2000
-	filterBatch       = 1000
-)
+const headerBatch = 2000
+const filterHeaderBatch = 2000
+const filterBatch = 1000
 
 // safetyGap starts the filter download a few blocks before the wallet seed
 // block so no relevant transaction is missed by timestamp jitter.
@@ -46,172 +44,175 @@ type watchScript struct {
 	script  []byte
 }
 
-// Syncer downloads and validates block headers and BIP158 basic filters and
-// matches the filters against the wallet scripts.
-type Syncer struct {
-	params      *chaincfg.Params
-	store       *storage.Store
-	chain       *Chain
-	scripts     []watchScript
-	progress    Progress
-	stats       RequestResult
-	hdrCh       chan *wire.MsgHeaders
-	cfhdrCh     chan *wire.MsgCFHeaders
-	fltCh       chan *wire.MsgCFilter
-	addrCh      chan *wire.MsgAddr
-	pending     map[int32]chainhash.Hash
-	seedTime    int64
-	filterStart int32
-	anchorPrev  chainhash.Hash
-	anchorSet   bool
-}
+// The sync state is package-scoped: one wallet database, one validated header
+// chain and one set of wallet scripts per process.
+var params *chaincfg.Params
+var store *storage.Store
+var chain *Chain
+var scripts []watchScript
+var progress Progress
+var stats RequestResult
+var hdrCh chan *wire.MsgHeaders
+var cfhdrCh chan *wire.MsgCFHeaders
+var fltCh chan *wire.MsgCFilter
+var addrCh chan *wire.MsgAddr
+var pending map[int32]chainhash.Hash
+var seedTime int64
+var filterStart int32
+var anchorPrev chainhash.Hash
+var anchorSet bool
 
-// NewSyncer loads the stored headers into the chain and collects the wallet
+// Init loads the stored headers into the chain and collects the wallet
 // scripts to watch. Stored headers are trusted: they were validated before
 // being persisted.
-func NewSyncer(params *chaincfg.Params, store *storage.Store, progress Progress) (*Syncer, error) {
-	var chain = NewChain(params)
+func Init(network *chaincfg.Params, db *storage.Store, onProgress Progress) error {
+	params = network
+	store = db
+	progress = onProgress
+	chain = NewChain(network)
+	hdrCh = make(chan *wire.MsgHeaders, 16)
+	cfhdrCh = make(chan *wire.MsgCFHeaders, 16)
+	fltCh = make(chan *wire.MsgCFilter, 16)
+	addrCh = make(chan *wire.MsgAddr, 8)
+	pending = make(map[int32]chainhash.Hash)
+	anchorPrev = chainhash.Hash{}
+	anchorSet = false
 	var count, err = store.HeaderCount()
 	if err != nil {
-		return nil, fmt.Errorf("load header count: %w", err)
+		return fmt.Errorf("load header count: %w", err)
 	}
 	if count == 0 {
 		if err := chain.Add(&params.GenesisBlock.Header); err != nil {
-			return nil, fmt.Errorf("add genesis: %w", err)
+			return fmt.Errorf("add genesis: %w", err)
 		}
 		var h = params.GenesisBlock.Header
 		if err := store.SaveHeader(headerFromWire(&h, 0)); err != nil {
-			return nil, fmt.Errorf("store genesis: %w", err)
+			return fmt.Errorf("store genesis: %w", err)
 		}
 	} else {
 		for height := int32(0); height < count; height++ {
 			var h, ok, err = store.HeaderAt(height)
 			if err != nil {
-				return nil, fmt.Errorf("load header %d: %w", height, err)
+				return fmt.Errorf("load header %d: %w", height, err)
 			}
 			if !ok {
-				return nil, fmt.Errorf("stored chain has no header at height %d", height)
+				return fmt.Errorf("stored chain has no header at height %d", height)
 			}
 			var hdr = wireFromHeader(h)
 			if err := chain.appendTrusted(&hdr); err != nil {
-				return nil, fmt.Errorf("load header %d: %w", height, err)
+				return fmt.Errorf("load header %d: %w", height, err)
 			}
 		}
 	}
 	addresses, err := store.Addresses()
 	if err != nil {
-		return nil, fmt.Errorf("load addresses: %w", err)
+		return fmt.Errorf("load addresses: %w", err)
 	}
-	var scripts = make([]watchScript, 0, len(addresses))
+	scripts = make([]watchScript, 0, len(addresses))
 	for _, a := range addresses {
 		scripts = append(scripts, watchScript{address: a.Address, script: p2wpkhScript(a.Pubkey)})
 	}
-	var seedTime int64
+	seedTime = 0
 	if meta, err := store.Meta(); err == nil {
 		seedTime = meta.CreatedAt
 	} else if !errors.Is(err, storage.ErrNoWallet) {
-		return nil, fmt.Errorf("load meta: %w", err)
+		return fmt.Errorf("load meta: %w", err)
 	}
-	return &Syncer{
-		params: params, store: store, chain: chain, scripts: scripts, progress: progress,
-		hdrCh: make(chan *wire.MsgHeaders, 16), cfhdrCh: make(chan *wire.MsgCFHeaders, 16),
-		fltCh: make(chan *wire.MsgCFilter, 16), addrCh: make(chan *wire.MsgAddr, 8),
-		pending: make(map[int32]chainhash.Hash),
-		seedTime: seedTime, filterStart: filterStartHeight(chain, seedTime),
-	}, nil
+	filterStart = filterStartHeight(chain, seedTime)
+	return nil
 }
 
 // firstHeaderAtOrAfter returns the height of the first header whose block
 // time is at or after the given unix time, or tip+1 when every header is
 // older. It is the first block that may contain transactions relevant to a
 // wallet created at that time.
-func firstHeaderAtOrAfter(chain *Chain, unix int64) int32 {
+func firstHeaderAtOrAfter(c *Chain, unix int64) int32 {
 	if unix <= 0 {
 		return 0
 	}
-	for height := int32(0); height <= chain.Height(); height++ {
-		var hdr, ok = chain.HeaderAt(height)
+	for height := int32(0); height <= c.Height(); height++ {
+		var hdr, ok = c.HeaderAt(height)
 		if ok && hdr.Timestamp.Unix() >= unix {
 			return height
 		}
 	}
-	return chain.Height() + 1
+	return c.Height() + 1
 }
 
 // filterStartHeight returns the height at which filter download begins: a
 // safety gap of safetyGap blocks before the first block at or after the
 // wallet seed time, clamped to genesis.
-func filterStartHeight(chain *Chain, unix int64) int32 {
-	var first = firstHeaderAtOrAfter(chain, unix)
+func filterStartHeight(c *Chain, unix int64) int32 {
+	var first = firstHeaderAtOrAfter(c, unix)
 	if first > safetyGap {
 		return first - safetyGap
 	}
 	return 0
 }
 
-// Listeners returns the peer message listeners wired to this syncer. They
-// must be installed before the connection is established. Advertised peer
-// addresses are persisted for later syncs.
-func (s *Syncer) Listeners() peer.MessageListeners {
+// Listeners returns the peer message listeners wired to the sync channels.
+// They must be installed before the connection is established. Advertised
+// peer addresses are persisted for later syncs.
+func Listeners() peer.MessageListeners {
 	return peer.MessageListeners{
-		OnHeaders:   func(_ *peer.Peer, msg *wire.MsgHeaders) { s.hdrCh <- msg },
-		OnCFHeaders: func(_ *peer.Peer, msg *wire.MsgCFHeaders) { s.cfhdrCh <- msg },
-		OnCFilter:   func(_ *peer.Peer, msg *wire.MsgCFilter) { s.fltCh <- msg },
+		OnHeaders:   func(_ *peer.Peer, msg *wire.MsgHeaders) { hdrCh <- msg },
+		OnCFHeaders: func(_ *peer.Peer, msg *wire.MsgCFHeaders) { cfhdrCh <- msg },
+		OnCFilter:   func(_ *peer.Peer, msg *wire.MsgCFilter) { fltCh <- msg },
 		OnAddr: func(_ *peer.Peer, msg *wire.MsgAddr) {
 			for _, na := range msg.AddrList {
 				if na.IP == nil || na.Port == 0 { continue }
 				var ip = na.IP.String()
 				if na.Services != 0 {
-					_ = s.store.UpdatePeerServices(ip, na.Port, uint64(na.Services))
+					_ = store.UpdatePeerServices(ip, na.Port, uint64(na.Services))
 				} else {
-					_ = s.store.SavePeer(ip, na.Port)
+					_ = store.SavePeer(ip, na.Port)
 				}
 			}
 			select {
-			case s.addrCh <- msg:
+			case addrCh <- msg:
 			default:
 			}
 		},
 	}
 }
 
-// Chain exposes the validated header chain.
-func (s *Syncer) Chain() *Chain { return s.chain }
+// HeaderChain exposes the validated header chain.
+func HeaderChain() *Chain { return chain }
 
 // FilterStart returns the height at which filter download begins: safetyGap
 // blocks before the first block whose time is at or after the wallet seed
 // creation time.
-func (s *Syncer) FilterStart() int32 { return s.filterStart }
+func FilterStart() int32 { return filterStart }
 
 // RefreshFilterStart recomputes the filter start height from the current
 // header chain. It must be called after the header sync: the chain may have
 // grown past the wallet seed time, which moves the start height.
-func (s *Syncer) RefreshFilterStart() {
-	s.filterStart = filterStartHeight(s.chain, s.seedTime)
+func RefreshFilterStart() {
+	filterStart = filterStartHeight(chain, seedTime)
 }
 
 // NeedsAnchor reports whether the first filter header must be majority
 // proven before the filter download starts.
-func (s *Syncer) NeedsAnchor() bool {
-	return s.filterStart > 0 && s.filterStart <= s.chain.Height()
+func NeedsAnchor() bool {
+	return filterStart > 0 && filterStart <= chain.Height()
 }
 
 // SetFilterAnchor stores the majority-proven anchor of the filter header
 // chain. The first cfheaders batch must then match it.
-func (s *Syncer) SetFilterAnchor(anchor chainhash.Hash) {
-	s.anchorPrev = anchor
-	s.anchorSet = true
+func SetFilterAnchor(anchor chainhash.Hash) {
+	anchorPrev = anchor
+	anchorSet = true
 }
 
 // RequestFilterAnchor asks one peer for the cfheaders batch starting at the
 // filter start height and returns the prev_filter_header it reports: the
 // candidate anchor for the filter header chain.
-func (s *Syncer) RequestFilterAnchor(p *peer.Peer) (chainhash.Hash, error) {
-	var hdr, ok = s.chain.HeaderAt(s.filterStart)
+func RequestFilterAnchor(p *peer.Peer) (chainhash.Hash, error) {
+	var hdr, ok = chain.HeaderAt(filterStart)
 	if !ok {
-		return chainhash.Hash{}, fmt.Errorf("filter start header %d not in chain", s.filterStart)
+		return chainhash.Hash{}, fmt.Errorf("filter start header %d not in chain", filterStart)
 	}
-	var resp, err = s.fetchCFHeaders(p, s.filterStart, hdr.Hash, anchorRequestTimeout)
+	var resp, err = fetchCFHeaders(p, filterStart, hdr.Hash, anchorRequestTimeout)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -241,29 +242,29 @@ func MajorityAnchor(votes []chainhash.Hash) (chainhash.Hash, error) {
 }
 
 // SetStats binds the request result callback to the peer currently in use.
-func (s *Syncer) SetStats(stats RequestResult) { s.stats = stats }
+func SetStats(onResult RequestResult) { stats = onResult }
 
 // RequestAddresses asks the peer for its known node addresses and waits for
 // the first batch. The addresses themselves are persisted by the OnAddr
 // listener. Peers may ignore getaddr, so the result is best effort.
-func (s *Syncer) RequestAddresses(p *peer.Peer) error {
-	s.drainAddr()
+func RequestAddresses(p *peer.Peer) error {
+	drainAddr()
 	var started = time.Now()
 	p.QueueMessage(wire.NewMsgGetAddr(), nil)
 	select {
-	case <-s.addrCh:
-		s.record(true, time.Since(started))
+	case <-addrCh:
+		record(true, time.Since(started))
 		return nil
 	case <-time.After(addrTimeout):
-		s.record(false, time.Since(started))
+		record(false, time.Since(started))
 		return fmt.Errorf("no addr response within %s", addrTimeout)
 	}
 }
 
-func (s *Syncer) drainAddr() {
+func drainAddr() {
 	for {
 		select {
-		case <-s.addrCh:
+		case <-addrCh:
 		default:
 			return
 		}
@@ -273,27 +274,28 @@ func (s *Syncer) drainAddr() {
 // SyncHeaders requests missing headers from the peer until its tip is
 // reached, validating and persisting every batch. It returns the new tip
 // height.
-func (s *Syncer) SyncHeaders(p *peer.Peer) (int32, error) {
+func SyncHeaders(p *peer.Peer) (int32, error) {
 	for {
 		var msg = wire.NewMsgGetHeaders()
 		msg.ProtocolVersion = p.ProtocolVersion()
-		msg.BlockLocatorHashes = s.chain.Locator()
+		msg.BlockLocatorHashes = chain.Locator()
 		var started = time.Now()
 		p.QueueMessage(msg, nil)
-		var batch, err = s.waitHeaders(p)
-		s.record(err == nil, time.Since(started))
-		if err != nil { return s.chain.Height(), err }
+		var batch, err = waitHeaders(p)
+		record(err == nil, time.Since(started))
+		if err != nil { return chain.Height(), err }
 		if len(batch) == 0 { break }
-		if err := s.extendHeaders(batch); err != nil {
-			return s.chain.Height(), fmt.Errorf("extend headers: %w", err)
+		if err := extendHeaders(batch); err != nil {
+			return chain.Height(), fmt.Errorf("extend headers: %w", err)
 		}
-		s.report("headers", s.chain.Height())
+		report("headers", chain.Height())
 		if len(batch) < headerBatch { break }
 	}
-	var tip, _ = s.chain.Tip()
-	s.report("headers", tip.Height)
+	var tip, _ = chain.Tip()
+	report("headers", tip.Height)
 	return tip.Height, nil
 }
+
 // SyncFilters downloads and verifies the BIP158 basic filters starting from
 // the block at which the wallet seed was created, matching each filter
 // against the wallet scripts. The full block header chain is synced first, so
@@ -301,59 +303,59 @@ func (s *Syncer) SyncHeaders(p *peer.Peer) (int32, error) {
 // downloaded filter is pruned right after matching; only its chained header
 // is kept to verify the filter header chain. It returns the number of new
 // filters downloaded.
-func (s *Syncer) SyncFilters(p *peer.Peer) (int32, error) {
-	s.RefreshFilterStart()
-	if err := s.store.PruneFilterDataFrom(s.filterStart); err != nil {
+func SyncFilters(p *peer.Peer) (int32, error) {
+	RefreshFilterStart()
+	if err := store.PruneFilterDataFrom(filterStart); err != nil {
 		return 0, fmt.Errorf("prune stored filter data: %w", err)
 	}
-	var start, err = s.store.FilterResumeHeight(s.filterStart)
+	var start, err = store.FilterResumeHeight(filterStart)
 	if err != nil {
 		return 0, fmt.Errorf("filter resume height: %w", err)
 	}
-	var tip, _ = s.chain.Tip()
+	var tip, _ = chain.Tip()
 	var downloaded = int32(0)
-	s.report("filters start", start)
+	report("filters start", start)
 	for start <= tip.Height {
 		var end = min(start+filterHeaderBatch-1, tip.Height)
-		var endHeader, _ = s.chain.HeaderAt(end)
-		if err := s.requestFilterHeaders(p, start, endHeader.Hash); err != nil {
+		var endHeader, _ = chain.HeaderAt(end)
+		if err := requestFilterHeaders(p, start, endHeader.Hash); err != nil {
 			return downloaded, fmt.Errorf("filter headers %d-%d: %w", start, end, err)
 		}
 		for fStart := start; fStart <= end; fStart += filterBatch {
 			var fEnd = min(fStart+filterBatch-1, end)
-			var stopHdr, _ = s.chain.HeaderAt(fEnd)
-			if err := s.requestFilters(p, fStart, stopHdr.Hash); err != nil {
+			var stopHdr, _ = chain.HeaderAt(fEnd)
+			if err := requestFilters(p, fStart, stopHdr.Hash); err != nil {
 				return downloaded, fmt.Errorf("filters %d-%d: %w", fStart, fEnd, err)
 			}
 			downloaded += fEnd - fStart + 1
 		}
 		start = end + 1
 	}
-	s.report("filters", tip.Height)
+	report("filters", tip.Height)
 	return downloaded, nil
 }
 
 // extendHeaders appends a peer batch to the chain, rewinding a shallow fork
 // if the batch does not continue from the tip.
-func (s *Syncer) extendHeaders(batch []*wire.BlockHeader) error {
+func extendHeaders(batch []*wire.BlockHeader) error {
 	var first = batch[0].PrevBlock
-	var fork = s.chain.HeightOf(first)
+	var fork = chain.HeightOf(first)
 	if fork < 0 {
 		return fmt.Errorf("peer chain continues from unknown block %s", first)
 	}
-	if fork < s.chain.Height() {
-		s.chain.Truncate(fork)
-		if err := s.store.DeleteHeadersFrom(fork); err != nil {
+	if fork < chain.Height() {
+		chain.Truncate(fork)
+		if err := store.DeleteHeadersFrom(fork); err != nil {
 			return fmt.Errorf("rewind stored headers: %w", err)
 		}
-		if err := s.store.DeleteFiltersFrom(fork); err != nil {
+		if err := store.DeleteFiltersFrom(fork); err != nil {
 			return fmt.Errorf("rewind stored filters: %w", err)
 		}
 	}
 	for _, hdr := range batch {
-		if err := s.chain.Add(hdr); err != nil { return err }
-		var height = s.chain.Height()
-		if err := s.store.SaveHeader(headerFromWire(hdr, height)); err != nil {
+		if err := chain.Add(hdr); err != nil { return err }
+		var height = chain.Height()
+		if err := store.SaveHeader(headerFromWire(hdr, height)); err != nil {
 			return fmt.Errorf("store header %d: %w", height, err)
 		}
 	}
@@ -362,17 +364,17 @@ func (s *Syncer) extendHeaders(batch []*wire.BlockHeader) error {
 
 // requestFilterHeaders fetches and verifies the filter header chain for one
 // batch, keeping the headers pending until their filters are downloaded.
-func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.Hash) error {
+func requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.Hash) error {
 	var started = time.Now()
-	var resp, err = s.fetchCFHeaders(p, start, stop, requestTimeout)
-	s.record(err == nil, time.Since(started))
+	var resp, err = fetchCFHeaders(p, start, stop, requestTimeout)
+	record(err == nil, time.Since(started))
 	if err != nil { return err }
-	if err := s.checkFilterPrev(start, resp.PrevFilterHeader); err != nil {
+	if err := checkFilterPrev(start, resp.PrevFilterHeader); err != nil {
 		return err
 	}
-	s.pending = make(map[int32]chainhash.Hash, len(resp.FilterHashes))
+	pending = make(map[int32]chainhash.Hash, len(resp.FilterHashes))
 	for i, hash := range resp.FilterHashes {
-		s.pending[start+int32(i)] = *hash
+		pending[start+int32(i)] = *hash
 	}
 	return nil
 }
@@ -380,11 +382,11 @@ func (s *Syncer) requestFilterHeaders(p *peer.Peer, start int32, stop chainhash.
 // fetchCFHeaders sends one getcfheaders request and validates the response
 // type, stop hash and filter header count. Stale responses from peers that
 // timed out earlier are discarded first.
-func (s *Syncer) fetchCFHeaders(p *peer.Peer, start int32, stop chainhash.Hash, timeout time.Duration) (*wire.MsgCFHeaders, error) {
-	s.drainCFHeaders()
+func fetchCFHeaders(p *peer.Peer, start int32, stop chainhash.Hash, timeout time.Duration) (*wire.MsgCFHeaders, error) {
+	drainCFHeaders()
 	var msg = wire.NewMsgGetCFHeaders(wire.GCSFilterRegular, uint32(start), &stop)
 	p.QueueMessage(msg, nil)
-	var resp, err = s.waitCFHeadersFor(p, timeout)
+	var resp, err = waitCFHeadersFor(p, timeout)
 	if err != nil { return nil, err }
 	if resp.FilterType != wire.GCSFilterRegular {
 		return nil, fmt.Errorf("unexpected filter type %d", resp.FilterType)
@@ -392,7 +394,7 @@ func (s *Syncer) fetchCFHeaders(p *peer.Peer, start int32, stop chainhash.Hash, 
 	if resp.StopHash != stop {
 		return nil, fmt.Errorf("stop hash %s, want %s", resp.StopHash, stop)
 	}
-	var wantCount = int(s.chain.HeightOf(stop) - start + 1)
+	var wantCount = int(chain.HeightOf(stop) - start + 1)
 	if len(resp.FilterHashes) != wantCount {
 		return nil, fmt.Errorf("got %d filter headers for %d blocks", len(resp.FilterHashes), wantCount)
 	}
@@ -401,10 +403,10 @@ func (s *Syncer) fetchCFHeaders(p *peer.Peer, start int32, stop chainhash.Hash, 
 
 // drainCFHeaders discards any stale cfheaders responses left by peers that
 // timed out earlier, so they are not mistaken for the next request's answer.
-func (s *Syncer) drainCFHeaders() {
+func drainCFHeaders() {
 	for {
 		select {
-		case <-s.cfhdrCh:
+		case <-cfhdrCh:
 		default:
 			return
 		}
@@ -418,20 +420,20 @@ func (s *Syncer) drainCFHeaders() {
 // first batch at the wallet seed height has no stored predecessor; it must
 // match the majority-proven anchor when one is set, and otherwise the peer's
 // prev_filter_header is trusted as the anchor of the filter header chain.
-func (s *Syncer) checkFilterPrev(start int32, got chainhash.Hash) error {
-	if start == s.filterStart && s.filterStart > 0 {
-		if s.anchorSet {
-			if got != s.anchorPrev {
-				return fmt.Errorf("filter header anchor %s, want majority-proven %s", got, s.anchorPrev)
+func checkFilterPrev(start int32, got chainhash.Hash) error {
+	if start == filterStart && filterStart > 0 {
+		if anchorSet {
+			if got != anchorPrev {
+				return fmt.Errorf("filter header anchor %s, want majority-proven %s", got, anchorPrev)
 			}
 			return nil
 		}
-		s.anchorPrev = got
+		anchorPrev = got
 		return nil
 	}
 	var want = chainhash.Hash{}
 	if start > 0 {
-		var stored, ok, err = s.store.FilterHeaderAt(start - 1)
+		var stored, ok, err = store.FilterHeaderAt(start - 1)
 		if err != nil { return err }
 		if !ok {
 			return fmt.Errorf("filter header at height %d not stored", start-1)
@@ -441,7 +443,7 @@ func (s *Syncer) checkFilterPrev(start int32, got chainhash.Hash) error {
 	if got == want {
 		return nil
 	}
-	if start == 0 && got == *s.params.GenesisHash {
+	if start == 0 && got == *params.GenesisHash {
 		return nil
 	}
 	return fmt.Errorf("filter header chain break at %d: prev %s, want %s", start, got, want)
@@ -449,23 +451,23 @@ func (s *Syncer) checkFilterPrev(start int32, got chainhash.Hash) error {
 
 // requestFilters downloads one batch of filters and verifies each against
 // its filter header and the block hash at the same height.
-func (s *Syncer) requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) error {
+func requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) error {
 	var msg = wire.NewMsgGetCFilters(wire.GCSFilterRegular, uint32(start), &stop)
 	var started = time.Now()
 	p.QueueMessage(msg, nil)
-	var expected = s.chain.HeightOf(stop) - start + 1
+	var expected = chain.HeightOf(stop) - start + 1
 	for range expected {
-		var resp, err = s.waitCFilter(p)
+		var resp, err = waitCFilter(p)
 		if err != nil {
-			s.record(false, time.Since(started))
+			record(false, time.Since(started))
 			return err
 		}
-		if err := s.storeFilter(resp); err != nil {
-			s.record(false, time.Since(started))
+		if err := storeFilter(resp); err != nil {
+			record(false, time.Since(started))
 			return err
 		}
 	}
-	s.record(true, time.Since(started))
+	record(true, time.Since(started))
 	return nil
 }
 
@@ -473,24 +475,24 @@ func (s *Syncer) requestFilters(p *peer.Peer, start int32, stop chainhash.Hash) 
 // stores it with its chained filter header, recording any wallet script it
 // matches. The filter data is pruned immediately after the row is stored, so
 // only the chained header remains to verify the filter header chain.
-func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
+func storeFilter(msg *wire.MsgCFilter) error {
 	if msg.FilterType != wire.GCSFilterRegular {
 		return fmt.Errorf("unexpected filter type %d", msg.FilterType)
 	}
-	var height = s.chain.HeightOf(msg.BlockHash)
+	var height = chain.HeightOf(msg.BlockHash)
 	if height < 0 {
 		return fmt.Errorf("cfilter for unknown block %s", msg.BlockHash)
 	}
 	var raw = filterHash(msg.Data)
-	if raw != s.pending[height] {
-		return fmt.Errorf("filter at height %d hashes to %s, want %s", height, raw, s.pending[height])
+	if raw != pending[height] {
+		return fmt.Errorf("filter at height %d hashes to %s, want %s", height, raw, pending[height])
 	}
 	var prev = chainhash.Hash{}
 	if height > 0 {
-		if height == s.filterStart {
-			prev = s.anchorPrev
+		if height == filterStart {
+			prev = anchorPrev
 		} else {
-			var stored, ok, err = s.store.FilterHeaderAt(height - 1)
+			var stored, ok, err = store.FilterHeaderAt(height - 1)
 			if err != nil { return err }
 			if !ok {
 				return fmt.Errorf("filter header at height %d not stored", height-1)
@@ -499,37 +501,37 @@ func (s *Syncer) storeFilter(msg *wire.MsgCFilter) error {
 		}
 	}
 	var header = filterHeader(raw, prev)
-	var scripts = make([][]byte, len(s.scripts))
-	for i, w := range s.scripts {
-		scripts[i] = w.script
+	var scriptBytes = make([][]byte, len(scripts))
+	for i, w := range scripts {
+		scriptBytes[i] = w.script
 	}
-	var hits, err = matchScripts(msg.Data, &msg.BlockHash, scripts)
+	var hits, err = matchScripts(msg.Data, &msg.BlockHash, scriptBytes)
 	if err != nil {
 		return fmt.Errorf("match filter at height %d: %w", height, err)
 	}
 	for i, hit := range hits {
 		if !hit { continue }
-		var w = s.scripts[i]
-		if err := s.store.SaveMatch(storage.Match{Height: height, BlockHash: msg.BlockHash, Address: w.address, Script: w.script}); err != nil {
+		var w = scripts[i]
+		if err := store.SaveMatch(storage.Match{Height: height, BlockHash: msg.BlockHash, Address: w.address, Script: w.script}); err != nil {
 			return fmt.Errorf("store match at height %d: %w", height, err)
 		}
 	}
-	if err := s.store.SaveFilter(storage.Filter{Height: height, BlockHash: msg.BlockHash, FilterHeader: header, Data: msg.Data}); err != nil {
+	if err := store.SaveFilter(storage.Filter{Height: height, BlockHash: msg.BlockHash, FilterHeader: header, Data: msg.Data}); err != nil {
 		return fmt.Errorf("store filter at height %d: %w", height, err)
 	}
-	if err := s.store.PruneFilterData(height); err != nil {
+	if err := store.PruneFilterData(height); err != nil {
 		return fmt.Errorf("prune filter at height %d: %w", height, err)
 	}
 	return nil
 }
 
-func (s *Syncer) waitHeaders(p *peer.Peer) ([]*wire.BlockHeader, error) {
+func waitHeaders(p *peer.Peer) ([]*wire.BlockHeader, error) {
 	var ticker = time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var deadline = time.Now().Add(requestTimeout)
 	for {
 		select {
-		case msg := <-s.hdrCh:
+		case msg := <-hdrCh:
 			return msg.Headers, nil
 		case <-ticker.C:
 			if !p.Connected() {
@@ -542,17 +544,17 @@ func (s *Syncer) waitHeaders(p *peer.Peer) ([]*wire.BlockHeader, error) {
 	}
 }
 
-func (s *Syncer) waitCFHeaders(p *peer.Peer) (*wire.MsgCFHeaders, error) {
-	return s.waitCFHeadersFor(p, requestTimeout)
+func waitCFHeaders(p *peer.Peer) (*wire.MsgCFHeaders, error) {
+	return waitCFHeadersFor(p, requestTimeout)
 }
 
-func (s *Syncer) waitCFHeadersFor(p *peer.Peer, timeout time.Duration) (*wire.MsgCFHeaders, error) {
+func waitCFHeadersFor(p *peer.Peer, timeout time.Duration) (*wire.MsgCFHeaders, error) {
 	var ticker = time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var deadline = time.Now().Add(timeout)
 	for {
 		select {
-		case msg := <-s.cfhdrCh:
+		case msg := <-cfhdrCh:
 			return msg, nil
 		case <-ticker.C:
 			if !p.Connected() {
@@ -565,13 +567,13 @@ func (s *Syncer) waitCFHeadersFor(p *peer.Peer, timeout time.Duration) (*wire.Ms
 	}
 }
 
-func (s *Syncer) waitCFilter(p *peer.Peer) (*wire.MsgCFilter, error) {
+func waitCFilter(p *peer.Peer) (*wire.MsgCFilter, error) {
 	var ticker = time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var deadline = time.Now().Add(requestTimeout)
 	for {
 		select {
-		case msg := <-s.fltCh:
+		case msg := <-fltCh:
 			return msg, nil
 		case <-ticker.C:
 			if !p.Connected() {
@@ -584,15 +586,15 @@ func (s *Syncer) waitCFilter(p *peer.Peer) (*wire.MsgCFilter, error) {
 	}
 }
 
-func (s *Syncer) report(stage string, height int32) {
-	if s.progress != nil {
-		s.progress(stage, height)
+func report(stage string, height int32) {
+	if progress != nil {
+		progress(stage, height)
 	}
 }
 
-func (s *Syncer) record(ok bool, latency time.Duration) {
-	if s.stats != nil {
-		s.stats(ok, latency)
+func record(ok bool, latency time.Duration) {
+	if stats != nil {
+		stats(ok, latency)
 	}
 }
 

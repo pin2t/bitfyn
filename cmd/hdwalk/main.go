@@ -24,31 +24,25 @@ import "bitfyn/internal/wallet"
 const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
 // Expected values published in the BIP84 test vectors (mainnet).
-const (
-	specRootPub     = "zpub6jftahH18ngZxLmXaKw3GSZzZsszmt9WqedkyZdezFtWRFBZqsQH5hyUmb4pCEeZGmVfQuP5bedXTB8is6fTv19U1GQRyQUKQGUTzyHACMF"
-	specAcctXPriv   = "zprvAdG4iTXWBoARxkkzNpNh8r6Qag3irQB8PzEMkAFeTRXxHpbF9z4QgEvBRmfvqWvGp42t42nvgGpNgYSJA9iefm1yYNZKEm7z6qUWCroSQnE"
-	specAcctXPub    = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"
-	specAddr0       = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
-	specPub0        = "0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c"
-	specAddr1       = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g"
-	specPub1        = "03e775fd51f0dfb8cd865d9ff1cca2a158cf651fe997fdc9fee9c1d3b5e995ea77"
-	specChangeAddr  = "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el"
-	specRootPriv    = "zprvAWgYBBk7JR8Gjrh4UJQ2uJdG1r3WNRRfURiABBE3RvMXYSrRJL62XuezvGdPvG6GFBZduosCc1YP5wixPox7zhZLfiUm8aunE96BBa4Kei5"
-	specSeed        = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
-	specChecksumBit = "3" // SHA256(entropy)[0] >> 4 for this vector
-)
+const specRootPub = "zpub6jftahH18ngZxLmXaKw3GSZzZsszmt9WqedkyZdezFtWRFBZqsQH5hyUmb4pCEeZGmVfQuP5bedXTB8is6fTv19U1GQRyQUKQGUTzyHACMF"
+const specAcctXPriv = "zprvAdG4iTXWBoARxkkzNpNh8r6Qag3irQB8PzEMkAFeTRXxHpbF9z4QgEvBRmfvqWvGp42t42nvgGpNgYSJA9iefm1yYNZKEm7z6qUWCroSQnE"
+const specAcctXPub = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"
+const specAddr0 = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+const specPub0 = "0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c"
+const specAddr1 = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g"
+const specPub1 = "03e775fd51f0dfb8cd865d9ff1cca2a158cf651fe997fdc9fee9c1d3b5e995ea77"
+const specChangeAddr = "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el"
+const specRootPriv = "zprvAWgYBBk7JR8Gjrh4UJQ2uJdG1r3WNRRfURiABBE3RvMXYSrRJL62XuezvGdPvG6GFBZduosCc1YP5wixPox7zhZLfiUm8aunE96BBa4Kei5"
+const specSeed = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+const specChecksumBit = "3" // SHA256(entropy)[0] >> 4 for this vector
 
 // SLIP-132 extended key version bytes for BIP84 (zprv/zpub).
-var (
-	zprvVer = [4]byte{0x04, 0xb2, 0x43, 0x0c}
-	zpubVer = [4]byte{0x04, 0xb2, 0x47, 0x46}
-)
+var zprvVer = [4]byte{0x04, 0xb2, 0x43, 0x0c}
+var zpubVer = [4]byte{0x04, 0xb2, 0x47, 0x46}
 
 // BIP44 chain indices: external = receive, internal = change.
-const (
-	externalChain = 0
-	changeChain   = 1
-)
+const externalChain = 0
+const changeChain = 1
 
 func main() {
 	var net = &chaincfg.MainNetParams
