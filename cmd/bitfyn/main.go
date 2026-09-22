@@ -135,26 +135,27 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 			return err
 		}
 	}
-	syncer, err := spv.NewSyncer(net, store, syncProgress)
-	if err != nil { return err }
+	if err := spv.Init(net, store, syncProgress); err != nil {
+		return err
+	}
 	var candidates, err3 = syncPeers(net, store, peerAddr)
 	if err3 != nil { return err3 }
-	var tip, herr = syncStageFromPeers(net, store, syncer, &candidates, stageHeaders)
+	var tip, herr = syncStageFromPeers(net, store, &candidates, stageHeaders)
 	if herr != nil { return herr }
-	syncer.RefreshFilterStart()
-	if syncer.NeedsAnchor() {
-		var anchor, ok, aerr = proveFilterAnchor(net, store, syncer, candidates)
+	spv.RefreshFilterStart()
+	if spv.NeedsAnchor() {
+		var anchor, ok, aerr = proveFilterAnchor(net, store, candidates)
 		if aerr != nil {
 			return fmt.Errorf("prove filter header anchor: %w", aerr)
 		}
 		if ok {
-			syncer.SetFilterAnchor(anchor)
+			spv.SetFilterAnchor(anchor)
 			log.Printf("filter header anchor proven by peer majority: %s", anchor)
 		} else {
 			log.Printf("no peer answered the filter header anchor request; the first filter peer will be trusted")
 		}
 	}
-	var filters, ferr = syncStageFromPeers(net, store, syncer, &candidates, stageFilters)
+	var filters, ferr = syncStageFromPeers(net, store, &candidates, stageFilters)
 	if ferr != nil { return ferr }
 	matches, err := store.Matches()
 	if err != nil { return err }
@@ -163,7 +164,7 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 		blocks[m.Height] = true
 	}
 	fmt.Printf("tip:     height %d\n", tip)
-	fmt.Printf("filters: %d downloaded (from height %d)\n", filters, syncer.FilterStart())
+	fmt.Printf("filters: %d downloaded (from height %d)\n", filters, spv.FilterStart())
 	fmt.Printf("matches: %d script hits in %d blocks\n", len(matches), len(blocks))
 	return nil
 }
@@ -208,10 +209,8 @@ func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) (
 // syncStage selects which part of the sync one peer connection runs.
 type syncStage int
 
-const (
-	stageHeaders syncStage = iota
-	stageFilters
-)
+const stageHeaders syncStage = 0
+const stageFilters syncStage = 1
 
 // anchorPeerLimit is how many peers are asked for the first filter header
 // when majority proving the filter header chain anchor.
@@ -222,11 +221,11 @@ const anchorPeerLimit = 10
 // appended to the candidate list between attempts. It returns the number
 // reported by the stage: the header tip for stageHeaders, the downloaded
 // filter count for stageFilters.
-func syncStageFromPeers(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, candidates *[]string, stage syncStage) (int32, error) {
+func syncStageFromPeers(params *chaincfg.Params, store *storage.Store, candidates *[]string, stage syncStage) (int32, error) {
 	var lastErr error
 	for i := 0; i < len(*candidates); i++ {
 		var addr = (*candidates)[i]
-		var n, err = syncFromPeer(params, store, syncer, addr, stage)
+		var n, err = syncFromPeer(params, store, addr, stage)
 		if err == nil { return n, nil }
 		lastErr = err
 		log.Printf("sync via %s failed: %v", addr, err)
@@ -239,13 +238,13 @@ func syncStageFromPeers(params *chaincfg.Params, store *storage.Store, syncer *s
 // header and returns the value reported by a strict majority. ok is false
 // when no peer responded; the caller then falls back to trusting the first
 // filter peer. Peers disagreeing without a majority are an error.
-func proveFilterAnchor(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, candidates []string) (chainhash.Hash, bool, error) {
+func proveFilterAnchor(params *chaincfg.Params, store *storage.Store, candidates []string) (chainhash.Hash, bool, error) {
 	var votes []chainhash.Hash
 	for _, addr := range candidates {
 		if len(votes) >= anchorPeerLimit { break }
 		var host, port, perr = splitHostPort(addr)
 		if perr != nil { continue }
-		var conn, _, derr = p2p.Dial(params, addr, syncer.Listeners())
+		var conn, _, derr = p2p.Dial(params, addr, spv.Listeners())
 		if derr != nil {
 			_ = store.RecordPeerResult(host, port, false, 0)
 			continue
@@ -259,7 +258,7 @@ func proveFilterAnchor(params *chaincfg.Params, store *storage.Store, syncer *sp
 			conn.WaitForDisconnect()
 			continue
 		}
-		var anchor, aerr = syncer.RequestFilterAnchor(conn)
+		var anchor, aerr = spv.RequestFilterAnchor(conn)
 		_ = store.RecordPeerResult(host, port, aerr == nil, 0)
 		conn.Disconnect()
 		conn.WaitForDisconnect()
@@ -283,11 +282,11 @@ func proveFilterAnchor(params *chaincfg.Params, store *storage.Store, syncer *sp
 // services and the handshake latency are stored on connect, every request
 // outcome and latency is recorded, and a peer without the compact filters
 // service is rejected before any request is made.
-func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, addr string, stage syncStage) (int32, error) {
+func syncFromPeer(params *chaincfg.Params, store *storage.Store, addr string, stage syncStage) (int32, error) {
 	log.Printf("syncing from %s", addr)
 	var host, port, perr = splitHostPort(addr)
 	if perr != nil { return 0, perr }
-	var conn, handshake, err = p2p.Dial(params, addr, syncer.Listeners())
+	var conn, handshake, err = p2p.Dial(params, addr, spv.Listeners())
 	if err != nil {
 		if rerr := store.RecordPeerResult(host, port, false, 0); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
@@ -305,20 +304,20 @@ func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syn
 	if flags&uint64(wire.SFNodeCF) == 0 {
 		return 0, fmt.Errorf("peer does not advertise compact filters")
 	}
-	syncer.SetStats(func(ok bool, latency time.Duration) {
+	spv.SetStats(func(ok bool, latency time.Duration) {
 		if rerr := store.RecordPeerResult(host, port, ok, latency.Milliseconds()); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
 		}
 	})
-	if aerr := syncer.RequestAddresses(conn); aerr != nil {
+	if aerr := spv.RequestAddresses(conn); aerr != nil {
 		log.Printf("peer %s: %v", addr, aerr)
 	}
 	if stage == stageHeaders {
-		var tip, herr = syncer.SyncHeaders(conn)
+		var tip, herr = spv.SyncHeaders(conn)
 		if herr != nil { return 0, fmt.Errorf("headers: %w", herr) }
 		return tip, nil
 	}
-	var filters, ferr = syncer.SyncFilters(conn)
+	var filters, ferr = spv.SyncFilters(conn)
 	if ferr != nil { return 0, fmt.Errorf("filters: %w", ferr) }
 	return filters, nil
 }

@@ -112,12 +112,10 @@ func (w *Wallet) derivePath(steps []uint32) (*hdkeychain.ExtendedKey, error) {
 func harden(v uint32) uint32 { return v + hdkeychain.HardenedKeyStart }
 
 // SLIP-132 extended public key version bytes.
-var (
-	xpubVersion = [4]byte{0x04, 0x88, 0xb2, 0x1e} // xpub (mainnet)
-	zpubVersion = [4]byte{0x04, 0xb2, 0x47, 0x46} // zpub (mainnet, BIP84)
-	tpubVersion = [4]byte{0x04, 0x35, 0x87, 0xcf} // tpub (testnet)
-	vpubVersion = [4]byte{0x04, 0x5f, 0x1c, 0xf6} // vpub (testnet, BIP84)
-)
+var xpubVersion = [4]byte{0x04, 0x88, 0xb2, 0x1e} // xpub (mainnet)
+var zpubVersion = [4]byte{0x04, 0xb2, 0x47, 0x46} // zpub (mainnet, BIP84)
+var tpubVersion = [4]byte{0x04, 0x35, 0x87, 0xcf} // tpub (testnet)
+var vpubVersion = [4]byte{0x04, 0x5f, 0x1c, 0xf6} // vpub (testnet, BIP84)
 
 // toSLIP132 re-encodes a BIP32 extended public key with the SLIP-132 version
 // bytes appropriate for BIP84. btcd's hdkeychain always uses the plain
