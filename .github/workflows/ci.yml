@@ -27,7 +27,7 @@ jobs:
       - name: Plain go vet
         run: go vet ./...
       - name: Install govets linters
-        run: go install github.com/pin2t/govets/imports-vet@v1.2.0 github.com/pin2t/govets/funcbody-vet@v1.2.0 github.com/pin2t/govets/vardecl-vet@v1.2.0 github.com/pin2t/govets/varname-vet@v1.2.0 github.com/pin2t/govets/groupdecl-vet@latest
+        run: go install github.com/pin2t/govets/imports-vet@v1.3.0 github.com/pin2t/govets/funcbody-vet@v1.3.0 github.com/pin2t/govets/vardecl-vet@v1.3.0 github.com/pin2t/govets/varname-vet@v1.3.0 github.com/pin2t/govets/groupdecl-vet@v1.3.0
       - name: Lint with imports-vet
         run: go vet -vettool="$(go env GOPATH)/bin/imports-vet" ./...
       - name: Lint with funcbody-vet
