@@ -12,6 +12,7 @@ import "path/filepath"
 import "strconv"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg"
+import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/wire"
 import "github.com/skip2/go-qrcode"
 import "bitfyn/internal/gui"
@@ -113,8 +114,10 @@ func runCheck(dataDir, network, dbPass string) error {
 }
 
 // runSync performs the SPV sync: block headers, BIP158 basic filters and
-// wallet address matching. Peers are tried one by one; a disconnected or
-// failing peer is replaced by the next candidate.
+// wallet address matching. Headers are synced from one peer, the first
+// filter header is then majority proven from several peers, and the filter
+// chain is finally downloaded from one peer. A disconnected or failing peer
+// is replaced by the next candidate.
 func runSync(dataDir, network, dbPass, peerAddr string) error {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return err }
@@ -136,20 +139,23 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 	if err != nil { return err }
 	var candidates, err3 = syncPeers(net, store, peerAddr)
 	if err3 != nil { return err3 }
-	var tip int32
-	var filters int32
-	var lastErr error
-	for i := 0; i < len(candidates); i++ {
-		var addr = candidates[i]
-		tip, filters, err = syncFromPeer(net, store, syncer, addr)
-		if err == nil { break }
-		lastErr = err
-		log.Printf("sync via %s failed: %v", addr, err)
-		addLearnedPeers(net, store, &candidates)
+	var tip, herr = syncStageFromPeers(net, store, syncer, &candidates, stageHeaders)
+	if herr != nil { return herr }
+	syncer.RefreshFilterStart()
+	if syncer.NeedsAnchor() {
+		var anchor, ok, aerr = proveFilterAnchor(net, store, syncer, candidates)
+		if aerr != nil {
+			return fmt.Errorf("prove filter header anchor: %w", aerr)
+		}
+		if ok {
+			syncer.SetFilterAnchor(anchor)
+			log.Printf("filter header anchor proven by peer majority: %s", anchor)
+		} else {
+			log.Printf("no peer answered the filter header anchor request; the first filter peer will be trusted")
+		}
 	}
-	if lastErr != nil {
-		return fmt.Errorf("all %d peers failed, last error: %w", len(candidates), lastErr)
-	}
+	var filters, ferr = syncStageFromPeers(net, store, syncer, &candidates, stageFilters)
+	if ferr != nil { return ferr }
 	matches, err := store.Matches()
 	if err != nil { return err }
 	var blocks = make(map[int32]bool)
@@ -157,7 +163,7 @@ func runSync(dataDir, network, dbPass, peerAddr string) error {
 		blocks[m.Height] = true
 	}
 	fmt.Printf("tip:     height %d\n", tip)
-	fmt.Printf("filters: %d downloaded\n", filters)
+	fmt.Printf("filters: %d downloaded (from height %d)\n", filters, syncer.FilterStart())
 	fmt.Printf("matches: %d script hits in %d blocks\n", len(matches), len(blocks))
 	return nil
 }
@@ -199,20 +205,94 @@ func syncPeers(params *chaincfg.Params, store *storage.Store, explicit string) (
 	return list, nil
 }
 
-// syncFromPeer dials one peer and runs the header and filter sync on it.
-// The advertised services and the handshake latency are stored on connect,
-// every request outcome and latency is recorded, and a peer without the
-// compact filters service is rejected before any request is made.
-func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, addr string) (int32, int32, error) {
+// syncStage selects which part of the sync one peer connection runs.
+type syncStage int
+
+const (
+	stageHeaders syncStage = iota
+	stageFilters
+)
+
+// anchorPeerLimit is how many peers are asked for the first filter header
+// when majority proving the filter header chain anchor.
+const anchorPeerLimit = 10
+
+// syncStageFromPeers runs one sync stage against the candidate peers in
+// order, failing over to the next peer on error. Newly learned peers are
+// appended to the candidate list between attempts. It returns the number
+// reported by the stage: the header tip for stageHeaders, the downloaded
+// filter count for stageFilters.
+func syncStageFromPeers(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, candidates *[]string, stage syncStage) (int32, error) {
+	var lastErr error
+	for i := 0; i < len(*candidates); i++ {
+		var addr = (*candidates)[i]
+		var n, err = syncFromPeer(params, store, syncer, addr, stage)
+		if err == nil { return n, nil }
+		lastErr = err
+		log.Printf("sync via %s failed: %v", addr, err)
+		addLearnedPeers(params, store, candidates)
+	}
+	return 0, fmt.Errorf("all %d peers failed, last error: %w", len(*candidates), lastErr)
+}
+
+// proveFilterAnchor asks up to anchorPeerLimit peers for the first filter
+// header and returns the value reported by a strict majority. ok is false
+// when no peer responded; the caller then falls back to trusting the first
+// filter peer. Peers disagreeing without a majority are an error.
+func proveFilterAnchor(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, candidates []string) (chainhash.Hash, bool, error) {
+	var votes []chainhash.Hash
+	for _, addr := range candidates {
+		if len(votes) >= anchorPeerLimit { break }
+		var host, port, perr = splitHostPort(addr)
+		if perr != nil { continue }
+		var conn, _, derr = p2p.Dial(params, addr, syncer.Listeners())
+		if derr != nil {
+			_ = store.RecordPeerResult(host, port, false, 0)
+			continue
+		}
+		var flags = uint64(conn.Services())
+		if serr := store.UpdatePeerServices(host, port, flags); serr != nil {
+			log.Printf("store peer %s: %v", addr, serr)
+		}
+		if flags&uint64(wire.SFNodeCF) == 0 {
+			conn.Disconnect()
+			conn.WaitForDisconnect()
+			continue
+		}
+		var anchor, aerr = syncer.RequestFilterAnchor(conn)
+		_ = store.RecordPeerResult(host, port, aerr == nil, 0)
+		conn.Disconnect()
+		conn.WaitForDisconnect()
+		if aerr != nil {
+			log.Printf("filter header anchor from %s failed: %v", addr, aerr)
+			continue
+		}
+		votes = append(votes, anchor)
+	}
+	if len(votes) == 0 {
+		return chainhash.Hash{}, false, nil
+	}
+	var anchor, err = spv.MajorityAnchor(votes)
+	if err != nil {
+		return chainhash.Hash{}, false, err
+	}
+	return anchor, true, nil
+}
+
+// syncFromPeer dials one peer and runs one sync stage on it. The advertised
+// services and the handshake latency are stored on connect, every request
+// outcome and latency is recorded, and a peer without the compact filters
+// service is rejected before any request is made.
+func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syncer, addr string, stage syncStage) (int32, error) {
 	log.Printf("syncing from %s", addr)
 	var host, port, perr = splitHostPort(addr)
-	if perr != nil { return 0, 0, perr }
+	if perr != nil { return 0, perr }
 	var conn, handshake, err = p2p.Dial(params, addr, syncer.Listeners())
 	if err != nil {
 		if rerr := store.RecordPeerResult(host, port, false, 0); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
 		}
-		return 0, 0, err
+		return 0, err
 	}
 	defer func() {
 		conn.Disconnect()
@@ -223,7 +303,7 @@ func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syn
 		log.Printf("store peer %s: %v", addr, serr)
 	}
 	if flags&uint64(wire.SFNodeCF) == 0 {
-		return 0, 0, fmt.Errorf("peer does not advertise compact filters")
+		return 0, fmt.Errorf("peer does not advertise compact filters")
 	}
 	syncer.SetStats(func(ok bool, latency time.Duration) {
 		if rerr := store.RecordPeerResult(host, port, ok, latency.Milliseconds()); rerr != nil {
@@ -233,11 +313,14 @@ func syncFromPeer(params *chaincfg.Params, store *storage.Store, syncer *spv.Syn
 	if aerr := syncer.RequestAddresses(conn); aerr != nil {
 		log.Printf("peer %s: %v", addr, aerr)
 	}
-	var tip, herr = syncer.SyncHeaders(conn)
-	if herr != nil { return 0, 0, fmt.Errorf("headers: %w", herr) }
+	if stage == stageHeaders {
+		var tip, herr = syncer.SyncHeaders(conn)
+		if herr != nil { return 0, fmt.Errorf("headers: %w", herr) }
+		return tip, nil
+	}
 	var filters, ferr = syncer.SyncFilters(conn)
-	if ferr != nil { return 0, 0, fmt.Errorf("filters: %w", ferr) }
-	return tip, filters, nil
+	if ferr != nil { return 0, fmt.Errorf("filters: %w", ferr) }
+	return filters, nil
 }
 
 // addLearnedPeers appends peers discovered from connected peers since the

@@ -49,7 +49,7 @@ create table if not exists cfilters (
 	height       integer primary key,
 	blockHash    blob not null,
 	filterHeader blob not null,
-	filterData   blob not null
+	filterData   blob
 );
 create table if not exists matches (
 	height    integer not null,
@@ -114,18 +114,25 @@ func Open(path, passphrase string) (*Store, error) {
 // filterHeaderVersion marks the schema revision that switched the stored
 // filter headers from raw filter hashes to chained filter headers. Older rows
 // are discarded on open because they cannot be used for linkage verification.
-const filterHeaderVersion = 2
+// filterPruneVersion marks the revision that made filterData nullable so a
+// downloaded filter can be pruned, keeping only its chained header. The
+// cfilters table is rebuilt and rows are dropped because filters are
+// re-downloadable from peers and old rows predate the seed-start sync.
+const (
+	filterHeaderVersion = 2
+	filterPruneVersion  = 3
+)
 
 func migrate(db *sql.DB) error {
 	var _, err = db.Exec(schema)
 	if err != nil { return err }
 	if err := addPeerColumns(db); err != nil { return err }
-	return upgradeFilterHeaders(db)
+	return upgradeSchema(db)
 }
 
-// upgradeFilterHeaders clears filter rows stored under the old raw-hash
-// scheme and stamps the schema version, once per database.
-func upgradeFilterHeaders(db *sql.DB) error {
+// upgradeSchema applies one-time table migrations and stamps the schema
+// version, once per database.
+func upgradeSchema(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow(`pragma user_version`).Scan(&version); err != nil {
 		return err
@@ -134,11 +141,42 @@ func upgradeFilterHeaders(db *sql.DB) error {
 		if _, err := db.Exec(`delete from cfilters`); err != nil {
 			return err
 		}
-		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, filterHeaderVersion)); err != nil {
+	}
+	if version < filterPruneVersion {
+		if err := rebuildCFilters(db); err != nil {
+			return err
+		}
+	}
+	if version < filterPruneVersion {
+		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, filterPruneVersion)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// rebuildCFilters recreates the cfilters table with a nullable filterData
+// column. The old rows are dropped: filter headers are re-downloaded from the
+// wallet seed height, so nothing valuable is lost.
+func rebuildCFilters(db *sql.DB) error {
+	var tx, err = db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	if _, err := tx.Exec(`drop table if exists cfilters_new`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		create table cfilters_new (
+			height       integer primary key,
+			blockHash    blob not null,
+			filterHeader blob not null,
+			filterData   blob
+		)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`drop table cfilters`); err != nil { return err }
+	if _, err := tx.Exec(`alter table cfilters_new rename to cfilters`); err != nil { return err }
+	return tx.Commit()
 }
 
 // addPeerColumns adds the peer statistics columns to databases created
