@@ -4,6 +4,7 @@
 
 # build artifacts
 /bitfyn
+/btcnodes
 *.db
 *.db-journal
 *.db-wal
