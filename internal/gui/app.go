@@ -61,6 +61,7 @@ type gui struct {
 	index uint32
 	qr   *QRWidget
 	addr *widget.Label
+	balance *widget.Label
 	signal *SignalWidget
 	status *widget.Label
 }
@@ -113,7 +114,7 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 
 // content builds the window layout: the address QR code in the centre and
 // the address text right below it with a clipboard copy icon directly after
-// the text.
+// the text, then the wallet balance, filled in by the sync status.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -131,6 +132,7 @@ func (g *gui) content() fyne.CanvasObject {
 	if err := g.refreshAddress(); err != nil {
 		dialog.ShowError(err, g.window)
 	}
+	g.balance = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
 	var corner = container.NewVBox(
@@ -142,6 +144,7 @@ func (g *gui) content() fyne.CanvasObject {
 		top,
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
+		container.NewCenter(g.balance),
 	)
 }
 
@@ -169,6 +172,7 @@ func (g *gui) startSync(peer string) {
 		fyne.Do(func() {
 			g.signal.SetLevel(s.Bars())
 			g.status.SetText(s.String())
+			g.balance.SetText(balanceText(s.Balance, s.Pending))
 		})
 	})
 	if err != nil {

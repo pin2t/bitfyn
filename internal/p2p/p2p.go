@@ -31,14 +31,17 @@ func (a PeerAddr) String() string {
 // handshake, leaving the peer ready for message exchange. The listeners are
 // installed before the connection starts so no early message is missed. The
 // returned duration is the full handshake latency, dial included. The local
-// peer advertises no services: it is a light client.
+// peer advertises no services: it is a light client, and it asks the peer
+// not to relay transactions.
 func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
-	return DialContext(context.Background(), params, address, listeners)
+	return DialContext(context.Background(), params, address, listeners, false)
 }
 
 // DialContext is Dial that gives up as soon as the context is cancelled,
-// during the TCP dial as well as during the handshake.
-func DialContext(ctx context.Context, params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
+// during the TCP dial as well as during the handshake. relay sets whether the
+// peer should announce the transactions it relays, the version message relay
+// flag; without it only a BIP37 filterload turns relay on.
+func DialContext(ctx context.Context, params *chaincfg.Params, address string, listeners peer.MessageListeners, relay bool) (*peer.Peer, time.Duration, error) {
 	var started = time.Now()
 	var dialer = net.Dialer{Timeout: HandshakeTimeout}
 	var conn, err = dialer.DialContext(ctx, "tcp", address)
@@ -51,7 +54,7 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 		ChainParams:         params,
 		Services:            0,
 		ProtocolVersion:     wire.FeeFilterVersion,
-		DisableRelayTx:      true,
+		DisableRelayTx:      !relay,
 		DisableStallHandler: true,
 		Listeners:           listeners,
 	}

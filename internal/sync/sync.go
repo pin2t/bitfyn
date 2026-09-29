@@ -46,7 +46,6 @@ var store *storage.Store
 var chain *spv.Chain
 var scripts []watchScript
 var scriptIndex map[string]int
-var outpoints map[wire.OutPoint]string
 var seedTime int64
 var filterStart int32
 var anchorPrev chainhash.Hash
@@ -101,7 +100,7 @@ func Init(network *chaincfg.Params, db *storage.Store) error {
 		scriptIndex[string(script)] = len(scripts)
 		scripts = append(scripts, watchScript{address: a.Address, script: script})
 	}
-	if err := loadOutpoints(); err != nil {
+	if err := loadWallet(); err != nil {
 		return err
 	}
 	seedTime = 0
@@ -285,7 +284,7 @@ func rewindTo(fork int32) error {
 	if err := store.DeleteTransactionsFrom(fork); err != nil {
 		return fmt.Errorf("rewind stored transactions: %w", err)
 	}
-	return loadOutpoints()
+	return loadWallet()
 }
 
 // checkFilterPrev verifies the prev_filter_header of a cfheaders batch
