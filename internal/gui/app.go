@@ -62,6 +62,7 @@ type gui struct {
 	qr   *QRWidget
 	addr *widget.Label
 	balance *widget.Label
+	pending *widget.RichText
 	signal *SignalWidget
 	status *widget.Label
 }
@@ -114,7 +115,8 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 
 // content builds the window layout: the address QR code in the centre and
 // the address text right below it with a clipboard copy icon directly after
-// the text, then the wallet balance, filled in by the sync status.
+// the text, then the wallet balance in large type with a small grey note on
+// the pending part below it, both filled in by the sync status.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -133,6 +135,9 @@ func (g *gui) content() fyne.CanvasObject {
 		dialog.ShowError(err, g.window)
 	}
 	g.balance = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	g.balance.SizeName = theme.SizeNameHeadingText
+	g.pending = widget.NewRichText(&widget.TextSegment{Style: pendingStyle})
+	g.pending.Hide()
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
 	var corner = container.NewVBox(
@@ -145,11 +150,12 @@ func (g *gui) content() fyne.CanvasObject {
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 		container.NewCenter(g.balance),
+		container.NewCenter(g.pending),
 	)
 }
 
-// refreshAddress derives the current address and updates QR, labels and the
-// address table.
+// refreshAddress derives the current address, updates QR, labels and the
+// address table, and has the sync watch the address.
 func (g *gui) refreshAddress() error {
 	var address, path, pubkey, err = g.wallet.DeriveAddress(g.index)
 	if err != nil {
@@ -162,6 +168,7 @@ func (g *gui) refreshAddress() error {
 	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
+	sync.Watch(address, pubkey)
 	return nil
 }
 
@@ -172,11 +179,53 @@ func (g *gui) startSync(peer string) {
 		fyne.Do(func() {
 			g.signal.SetLevel(s.Bars())
 			g.status.SetText(s.String())
-			g.balance.SetText(balanceText(s.Balance, s.Pending))
+			g.showBalance(s.Balance, s.Pending)
+			g.rotateIfUsed()
 		})
 	})
 	if err != nil {
 		log.Printf("sync failed to start: %v", err)
 		g.status.SetText("Sync failed: " + err.Error())
+	}
+}
+
+// rotateIfUsed moves on to the next address once the displayed one has
+// received a payment, confirmed or pending, so every payment goes to a fresh
+// address. The new index is saved and the address is watched by the sync.
+func (g *gui) rotateIfUsed() {
+	for sync.IsUsed(g.addr.Text) {
+		var used = g.addr.Text
+		g.index++
+		if err := g.store.UpdateNextIndex(g.index); err != nil {
+			dialog.ShowError(fmt.Errorf("save next address index: %w", err), g.window)
+			return
+		}
+		if err := g.refreshAddress(); err != nil {
+			dialog.ShowError(err, g.window)
+			return
+		}
+		log.Printf("address %s received a payment, showing next address %s (index %d)", used, g.addr.Text, g.index)
+	}
+}
+
+// pendingStyle sets the pending note in small type and the theme's
+// placeholder grey, a muted colour that stays readable in both themes.
+var pendingStyle = widget.RichTextStyle{
+	Alignment: fyne.TextAlignCenter,
+	ColorName: theme.ColorNamePlaceHolder,
+	SizeName:  theme.SizeNameCaptionText,
+}
+
+// showBalance shows the spendable balance and, only while something is
+// unconfirmed, the pending note under it.
+func (g *gui) showBalance(confirmed, pending int64) {
+	g.balance.SetText(balanceText(confirmed, pending))
+	var note = pendingText(pending)
+	g.pending.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: note, Style: pendingStyle}}
+	g.pending.Refresh()
+	if note == "" {
+		g.pending.Hide()
+	} else {
+		g.pending.Show()
 	}
 }

@@ -3,6 +3,7 @@ package gui
 import "image"
 import "image/color"
 import "testing"
+import "fyne.io/fyne/v2"
 
 // TestRoundedCellMask checks that a cell mask cuts only the very corner of a
 // large cell and keeps the centre and mid-edges fully opaque.
@@ -33,8 +34,12 @@ func TestRoundedCellMaskSmall(t *testing.T) {
 }
 
 // TestQRColorsFallback checks the black-on-white defaults used when no Fyne
-// app is running, e.g. in unit tests or headless rendering.
+// app is running, e.g. in unit tests or headless rendering. The Fyne test
+// package installs an app on import, so it is cleared for the check.
 func TestQRColorsFallback(t *testing.T) {
+	var saved = fyne.CurrentApp()
+	fyne.SetCurrentApp(nil)
+	defer fyne.SetCurrentApp(saved)
 	var background, foreground = qrColors()
 	if background != color.White {
 		t.Errorf("background = %v, want white", background)

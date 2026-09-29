@@ -170,3 +170,46 @@ func TestWalletBloomStaysSelective(t *testing.T) {
 		t.Fatalf("%d of 5000 unrelated transactions matched, the filter is not selective", matched)
 	}
 }
+
+// TestUsedAndWatch checks that pending and confirmed payments mark their
+// address used, and that a watched new address is matched from then on.
+func TestUsedAndWatch(t *testing.T) {
+	var mine = testWallet(t)
+	if IsUsed("bc1mine") {
+		t.Fatal("fresh address reported used")
+	}
+	acceptPendingTx(&conn{addr: "p"}, testTx(wire.OutPoint{Hash: chainhash.Hash{1}}, mine))
+	if !IsUsed("bc1mine") {
+		t.Fatal("address with a pending payment not reported used")
+	}
+	var pubkey = bytes.Repeat([]byte{2}, 33)
+	Watch("bc1next", pubkey)
+	Watch("bc1next", pubkey)
+	if len(watchedScripts()) != 2 {
+		t.Fatalf("watched scripts = %d, want 2", len(watchedScripts()))
+	}
+	if IsUsed("bc1next") {
+		t.Fatal("new address reported used")
+	}
+	var next = p2wpkhScript(pubkey)
+	if _, err := processBlock(12, testBlock(testTx(wire.OutPoint{Hash: chainhash.Hash{2}}, next))); err != nil {
+		t.Fatalf("processBlock: %v", err)
+	}
+	if !IsUsed("bc1next") {
+		t.Fatal("address with a confirmed payment not reported used")
+	}
+	if conf, pend := walletBalance(); conf != 1000 || pend != 1000 {
+		t.Fatalf("balance = %d confirmed, %d pending; want 1000, 1000", conf, pend)
+	}
+}
+
+// TestWatchBeforeInit checks that watching an address before the sync is
+// initialised is a harmless no-op.
+func TestWatchBeforeInit(t *testing.T) {
+	resetSync()
+	scriptIndex = nil
+	Watch("bc1early", bytes.Repeat([]byte{2}, 33))
+	if len(scripts) != 0 {
+		t.Fatalf("address watched before init: %v", scripts)
+	}
+}

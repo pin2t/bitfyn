@@ -46,15 +46,20 @@ func groupDigits(digits string) string {
 	return b.String()
 }
 
-// balanceText is the balance line: the confirmed balance, followed by the
-// change unconfirmed transactions make to it, when there is one.
+// balanceText is the main balance line: the spendable balance, which counts
+// unconfirmed transactions too.
 func balanceText(confirmed, pending int64) string {
-	var text = formatAmount(confirmed)
+	return formatAmount(confirmed + pending)
+}
+
+// pendingText is the note under the balance naming the part of it that is
+// still unconfirmed, or empty when nothing is pending.
+func pendingText(pending int64) string {
 	switch {
 	case pending > 0:
-		text += " (+" + formatAmount(pending) + " pending)"
+		return "(+" + formatAmount(pending) + " pending)"
 	case pending < 0:
-		text += " (" + formatAmount(pending) + " pending)"
+		return "(" + formatAmount(pending) + " pending)"
 	}
-	return text
+	return ""
 }

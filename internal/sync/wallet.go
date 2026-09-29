@@ -26,6 +26,7 @@ var confirmedIDs map[chainhash.Hash]bool
 var pendingIDs map[chainhash.Hash]bool
 var pendingSpends map[wire.OutPoint]chainhash.Hash
 var seenTxs = make(map[chainhash.Hash]bool)
+var usedAddrs map[string]bool
 var confirmedBalance int64
 var pendingBalance int64
 
@@ -72,11 +73,13 @@ func loadWalletLocked() error {
 		}
 	}
 	outpoints = make(map[wire.OutPoint]string)
+	usedAddrs = make(map[string]bool)
 	for _, tx := range append(confirmed, unconfirmed...) {
 		var txid = tx.TxHash()
 		for i, out := range tx.TxOut {
 			if idx, ok := scriptIndex[string(out.PkScript)]; ok {
 				outpoints[wire.OutPoint{Hash: txid, Index: uint32(i)}] = scripts[idx].address
+				usedAddrs[scripts[idx].address] = true
 			}
 		}
 	}
@@ -130,6 +133,43 @@ func unspentValue(txs []*wire.MsgTx, isMine func([]byte) bool) int64 {
 		sum += value
 	}
 	return sum
+}
+
+// IsUsed reports whether the address has received a payment, confirmed or
+// still pending.
+func IsUsed(address string) bool {
+	walletMu.Lock()
+	defer walletMu.Unlock()
+	return usedAddrs[address]
+}
+
+// Watch adds a newly derived P2WPKH wallet address to the watched scripts,
+// so filters, blocks and relayed transactions are matched against it too,
+// and refreshes the peers' bloom filters. It does nothing before the sync is
+// initialised: Init loads every stored address.
+func Watch(address string, pubkey []byte) {
+	var script = p2wpkhScript(pubkey)
+	walletMu.Lock()
+	if scriptIndex == nil {
+		walletMu.Unlock()
+		return
+	}
+	if _, ok := scriptIndex[string(script)]; ok {
+		walletMu.Unlock()
+		return
+	}
+	scriptIndex[string(script)] = len(scripts)
+	scripts = append(scripts, watchScript{address: address, script: script})
+	walletMu.Unlock()
+	log.Printf("sync: watching address %s", address)
+	reloadBlooms()
+}
+
+// watchedScripts returns a snapshot of the watched wallet scripts.
+func watchedScripts() []watchScript {
+	walletMu.Lock()
+	defer walletMu.Unlock()
+	return append([]watchScript(nil), scripts...)
 }
 
 // walletBalance returns the confirmed balance and the pending change.
