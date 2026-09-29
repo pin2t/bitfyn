@@ -4,6 +4,8 @@ import "bytes"
 import "reflect"
 import "testing"
 import "fyne.io/fyne/v2/test"
+import "fyne.io/fyne/v2/theme"
+import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/btcutil"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/wire"
@@ -55,5 +57,34 @@ func TestRotateIfUsed(t *testing.T) {
 	var meta, merr = g.store.Meta()
 	if merr != nil || meta.NextIndex != 1 {
 		t.Fatalf("stored next index = %d, %v; want 1", meta.NextIndex, merr)
+	}
+}
+
+// TestShowBalance checks the large balance and the small grey pending note,
+// which is shown only while something is unconfirmed.
+func TestShowBalance(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = app.NewWindow("test")
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	w.SetContent(g.content())
+	if g.balance.SizeName != theme.SizeNameHeadingText {
+		t.Fatal("balance must be heading size")
+	}
+	g.showBalance(1_000_000, 250_000)
+	var note = g.pending.Segments[0].(*widget.TextSegment)
+	if g.balance.Text != "1 250 000 sats" || note.Text != "(+250 000 sats pending)" || !g.pending.Visible() {
+		t.Fatalf("with pending: %q, %q, visible %v", g.balance.Text, note.Text, g.pending.Visible())
+	}
+	if note.Style.SizeName != theme.SizeNameCaptionText || note.Style.ColorName != theme.ColorNamePlaceHolder {
+		t.Fatal("pending note must be caption size in the placeholder grey")
+	}
+	g.showBalance(1_250_000, 0)
+	if g.balance.Text != "1 250 000 sats" || g.pending.Visible() {
+		t.Fatalf("without pending: %q, note visible %v", g.balance.Text, g.pending.Visible())
 	}
 }
