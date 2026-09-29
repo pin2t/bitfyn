@@ -275,3 +275,33 @@ func TestBatchWrites(t *testing.T) {
 		t.Fatalf("FilterResumeHeight(5) = %d, %v; want 7", n, err)
 	}
 }
+
+// TestPending checks that unconfirmed transactions keep their first-seen
+// time, can be deleted one by one and expire by age.
+func TestPending(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	var old = PendingTx{Txid: chainhash.Hash{1}, Raw: []byte{1}, SeenAt: 100}
+	var fresh = PendingTx{Txid: chainhash.Hash{2}, Raw: []byte{2}, SeenAt: 200}
+	for _, p := range []PendingTx{fresh, old, {Txid: chainhash.Hash{1}, Raw: []byte{1}, SeenAt: 300}} {
+		if err := st.SavePending(p); err != nil {
+			t.Fatalf("SavePending: %v", err)
+		}
+	}
+	var got, gerr = st.PendingTransactions()
+	if gerr != nil || len(got) != 2 || got[0].Txid != old.Txid || got[0].SeenAt != 100 || got[1].Txid != fresh.Txid {
+		t.Fatalf("PendingTransactions = %+v, %v", got, gerr)
+	}
+	if n, err := st.DeletePendingBefore(150); err != nil || n != 1 {
+		t.Fatalf("DeletePendingBefore = %d, %v; want 1", n, err)
+	}
+	if err := st.DeletePending(fresh.Txid); err != nil {
+		t.Fatalf("DeletePending: %v", err)
+	}
+	if got, err := st.PendingTransactions(); err != nil || len(got) != 0 {
+		t.Fatalf("PendingTransactions after deletes = %+v, %v", got, err)
+	}
+}

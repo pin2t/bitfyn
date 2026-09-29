@@ -25,8 +25,10 @@ const anchorPeerLimit = 10
 const anchorDialers = 8
 
 // pinnedMaxBackoff caps the delay between reconnect attempts to the pinned
-// peer.
+// peer; a connection to it lasting pinnedStableAfter resets the backoff, a
+// shorter one counts as a failed attempt.
 const pinnedMaxBackoff = time.Minute
+const pinnedStableAfter = 30 * time.Second
 
 // retryDelay paces reconnect attempts and failed sync rounds.
 const retryDelay = 5 * time.Second
@@ -44,11 +46,15 @@ const StateHeaders State = 1
 const StateFilters State = 2
 
 // Status is a snapshot of the sync for display: the number of connected
-// peers, the current activity and the block height that activity has reached.
+// peers, the current activity, the block height that activity has reached,
+// and the wallet balance in satoshis: confirmed, and the change pending
+// unconfirmed transactions make to it.
 type Status struct {
-	State  State
-	Peers  int
-	Height int32
+	State   State
+	Peers   int
+	Height  int32
+	Balance int64
+	Pending int64
 }
 
 // Bars returns the connectivity level from 0 to TargetPeers: one per
@@ -153,8 +159,9 @@ func Stop() {
 func emit() {
 	emitMu.Lock()
 	defer emitMu.Unlock()
+	var confirmed, pending = walletBalance()
 	mu.Lock()
-	var status = Status{State: activity, Peers: len(pool), Height: height}
+	var status = Status{State: activity, Peers: len(pool), Height: height, Balance: confirmed, Pending: pending}
 	var cb = notify
 	var live = !stopped
 	mu.Unlock()
@@ -234,14 +241,16 @@ func maintain() {
 }
 
 // keepPinned keeps the pinned peer connected: it dials it, waits for the
-// connection to drop and dials again, backing off while it is unreachable.
+// connection to drop and dials again. It backs off while the peer is
+// unreachable or keeps dropping the connection soon after the handshake, as
+// a node with full inbound slots does when it evicts its newest peer.
 func keepPinned() {
 	defer wg.Done()
 	var backoff = retryDelay
 	for {
 		if connect(pinnedAddr, true) {
-			backoff = retryDelay
 			var c = pinnedConn()
+			var since = time.Now()
 			if c != nil {
 				select {
 				case <-stop:
@@ -249,7 +258,12 @@ func keepPinned() {
 				case <-c.quit:
 				}
 			}
-			continue
+			var lasted = time.Since(since)
+			if lasted >= pinnedStableAfter {
+				backoff = retryDelay
+				continue
+			}
+			log.Printf("pinned peer %s dropped the connection after %s", pinnedAddr, lasted.Round(time.Millisecond))
 		}
 		log.Printf("pinned peer %s: retrying in %s", pinnedAddr, backoff)
 		if !pause(backoff) { return }
@@ -368,7 +382,7 @@ func connect(addr string, pinned bool) bool {
 	var c, err = newConn(addr)
 	if err != nil { return false }
 	c.pinned = pinned
-	handshake, err := c.dial()
+	handshake, err := c.dial(true)
 	if err != nil {
 		log.Printf("peer %s: connect failed: %v", addr, err)
 		if rerr := store.RecordPeerResult(c.host, c.port, false, 0); rerr != nil {
@@ -382,7 +396,11 @@ func connect(addr string, pinned bool) bool {
 		log.Printf("store peer %s: %v", addr, serr)
 	}
 	if flags&uint64(wire.SFNodeCF) == 0 {
-		log.Printf("peer %s: no compact filter service (%s), disconnecting", addr, p.Services())
+		if pinned {
+			log.Printf("pinned peer %s: no compact filter service (%s), disconnecting; it needs blockfilterindex=1 and peerblockfilters=1", addr, p.Services())
+		} else {
+			log.Printf("peer %s: no compact filter service (%s), disconnecting", addr, p.Services())
+		}
 		c.close()
 		return false
 	}
@@ -401,6 +419,8 @@ func connect(addr string, pinned bool) bool {
 	if pinned { kind = "pinned peer" }
 	log.Printf("%s %s connected: %s, height %d, services %s, handshake %s (%d connected)",
 		kind, addr, p.UserAgent(), p.LastBlock(), p.Services(), handshake.Round(time.Millisecond), count)
+	c.loadBloom()
+	logRelayMode()
 	emit()
 	wakeSync()
 	go func() {
@@ -411,6 +431,7 @@ func connect(addr string, pinned bool) bool {
 		var left = len(pool)
 		mu.Unlock()
 		log.Printf("%s %s disconnected (%d connected)", kind, addr, left)
+		logRelayMode()
 		emit()
 		notifyPool()
 	}()
@@ -458,6 +479,7 @@ func syncLoop() {
 // majority proven once per run before the filter download starts. A primary
 // failing the header sync is disconnected so the next round uses another.
 func syncOnce(c *conn) error {
+	if err := expirePending(); err != nil { return err }
 	var before = chain.Height()
 	report(StateHeaders, before)
 	if _, err := syncHeaders(c); err != nil {
@@ -569,7 +591,7 @@ feed:
 func dialAnchor(addr string) (chainhash.Hash, error) {
 	var c, err = newConn(addr)
 	if err != nil { return chainhash.Hash{}, err }
-	if _, err := c.dial(); err != nil {
+	if _, err := c.dial(false); err != nil {
 		_ = store.RecordPeerResult(c.host, c.port, false, 0)
 		return chainhash.Hash{}, err
 	}

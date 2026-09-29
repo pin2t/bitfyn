@@ -47,10 +47,11 @@ func newConn(addr string) (*conn, error) {
 	}, nil
 }
 
-// dial connects and completes the handshake. quit is closed once the peer
+// dial connects and completes the handshake, asking the peer to announce the
+// transactions it relays when relay is set. quit is closed once the peer
 // disconnects, for whatever reason.
-func (c *conn) dial() (time.Duration, error) {
-	var p, handshake, err = p2p.DialContext(dialCtx, params, c.addr, c.listeners())
+func (c *conn) dial(relay bool) (time.Duration, error) {
+	var p, handshake, err = p2p.DialContext(dialCtx, params, c.addr, c.listeners(), relay)
 	if err != nil { return 0, err }
 	c.peer = p
 	go func() {
@@ -94,8 +95,9 @@ func (c *conn) record(ok bool, started time.Time) {
 }
 
 // listeners routes the peer's responses to this connection's channels.
-// Advertised peer addresses are persisted, and a block announcement wakes the
-// sync loop.
+// Advertised peer addresses are persisted, a block announcement wakes the
+// sync loop, and the transactions announced by the relay source are fetched
+// and checked against the wallet.
 func (c *conn) listeners() peer.MessageListeners {
 	return peer.MessageListeners{
 		OnHeaders:   func(_ *peer.Peer, msg *wire.MsgHeaders) { deliver(c, c.headers, msg) },
@@ -103,7 +105,14 @@ func (c *conn) listeners() peer.MessageListeners {
 		OnCFilter:   func(_ *peer.Peer, msg *wire.MsgCFilter) { deliver(c, c.cfilters, msg) },
 		OnBlock:     func(_ *peer.Peer, msg *wire.MsgBlock, _ []byte) { deliver(c, c.blocks, msg) },
 		OnNotFound:  func(_ *peer.Peer, msg *wire.MsgNotFound) { deliver(c, c.notFound, msg) },
-		OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
+		OnTx: func(_ *peer.Peer, msg *wire.MsgTx) {
+			countRelayed(c, msg)
+			acceptPendingTx(c, msg)
+		},
+		OnInv: func(p *peer.Peer, msg *wire.MsgInv) {
+			if relaySource(c, orderedPeers()) {
+				requestTxs(p, msg)
+			}
 			for _, iv := range msg.InvList {
 				if iv.Type != wire.InvTypeBlock { continue }
 				if chain != nil && chain.HeightOf(iv.Hash) < 0 {

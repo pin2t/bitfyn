@@ -64,6 +64,11 @@ create table if not exists transactions (
 	blockHash blob    not null,
 	raw       blob    not null
 );
+create table if not exists pending (
+	txid   blob    primary key,
+	raw    blob    not null,
+	seenAt integer not null
+);
 create table if not exists peers (
 	host      text    not null,
 	port      integer not null,

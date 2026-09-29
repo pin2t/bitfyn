@@ -202,8 +202,8 @@ func TestProcessBlock(t *testing.T) {
 		t.Fatalf("stored transactions = %+v, %v", txs, terr)
 	}
 	outpoints = nil
-	if err := loadOutpoints(); err != nil {
-		t.Fatalf("loadOutpoints: %v", err)
+	if err := loadWallet(); err != nil {
+		t.Fatalf("loadWallet: %v", err)
 	}
 	if len(outpoints) != 1 || outpoints[coin] != "bc1mine" {
 		t.Fatalf("reloaded coins = %v", outpoints)

@@ -40,6 +40,14 @@ type Transaction struct {
 	Raw       []byte
 }
 
+// PendingTx is one unconfirmed wallet transaction relayed by a peer, with
+// the unix time it was first seen.
+type PendingTx struct {
+	Txid   chainhash.Hash
+	Raw    []byte
+	SeenAt int64
+}
+
 // StoredAddress is one derived address row with its public key.
 type StoredAddress struct {
 	Index   uint32
@@ -305,6 +313,51 @@ func (s *Store) Transactions() ([]Transaction, error) {
 func (s *Store) DeleteTransactionsFrom(height int32) error {
 	var _, err = s.db.Exec(`delete from transactions where height > ?`, height)
 	return err
+}
+
+// SavePending stores an unconfirmed wallet transaction. A transaction seen
+// before keeps its first-seen time.
+func (s *Store) SavePending(p PendingTx) error {
+	var _, err = s.db.Exec(`insert or ignore into pending (txid, raw, seenAt) values (?, ?, ?)`, p.Txid[:], p.Raw, p.SeenAt)
+	return err
+}
+
+// PendingTransactions returns every unconfirmed wallet transaction, oldest
+// first.
+func (s *Store) PendingTransactions() ([]PendingTx, error) {
+	var rows, err = s.db.Query(`select txid, raw, seenAt from pending order by seenAt, rowid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingTx
+	for rows.Next() {
+		var p PendingTx
+		var txid []byte
+		if err := rows.Scan(&txid, &p.Raw, &p.SeenAt); err != nil {
+			return nil, err
+		}
+		copy(p.Txid[:], txid)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// DeletePending removes an unconfirmed transaction, once it confirmed or
+// was replaced.
+func (s *Store) DeletePending(txid chainhash.Hash) error {
+	var _, err = s.db.Exec(`delete from pending where txid = ?`, txid[:])
+	return err
+}
+
+// DeletePendingBefore removes the unconfirmed transactions first seen before
+// the unix time and returns how many were removed.
+func (s *Store) DeletePendingBefore(unix int64) (int64, error) {
+	var res, err = s.db.Exec(`delete from pending where seenAt < ?`, unix)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // Addresses returns all derived addresses with their public keys.
