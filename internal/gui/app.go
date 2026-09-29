@@ -10,10 +10,12 @@ import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/app"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
+import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
 import "bitfyn/internal/storage"
+import "bitfyn/internal/sync"
 import "bitfyn/internal/wallet"
 
 // Options configures the GUI.
@@ -21,6 +23,7 @@ type Options struct {
 	DataDir string
 	Network string
 	DBPass  string
+	Peer    string
 }
 
 // Run starts the Fyne application and blocks until the window is closed.
@@ -40,8 +43,12 @@ func Run(opts Options) {
 		w.ShowAndRun()
 		return
 	}
-	w.SetOnClosed(func() { _ = gui.store.Close() })
+	w.SetOnClosed(func() {
+		sync.Stop()
+		_ = gui.store.Close()
+	})
 	w.SetContent(gui.content())
+	a.Lifecycle().SetOnStarted(func() { gui.startSync(opts.Peer) })
 	w.ShowAndRun()
 }
 
@@ -54,6 +61,8 @@ type gui struct {
 	index uint32
 	qr   *QRWidget
 	addr *widget.Label
+	signal *SignalWidget
+	status *widget.Label
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -122,7 +131,14 @@ func (g *gui) content() fyne.CanvasObject {
 	if err := g.refreshAddress(); err != nil {
 		dialog.ShowError(err, g.window)
 	}
+	g.signal = NewSignalWidget()
+	g.status = widget.NewLabel(sync.Status{}.String())
+	var corner = container.NewVBox(
+		container.NewHBox(layout.NewSpacer(), g.signal),
+		container.NewHBox(layout.NewSpacer(), g.status),
+	)
 	return container.NewVBox(
+		corner,
 		top,
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
@@ -144,4 +160,19 @@ func (g *gui) refreshAddress() error {
 		return fmt.Errorf("store address: %w", err)
 	}
 	return nil
+}
+
+// startSync begins the background network sync and shows its connectivity in
+// the indicator and the status line.
+func (g *gui) startSync(peer string) {
+	var err = sync.Start(g.wallet.Net(), g.store, peer, func(s sync.Status) {
+		fyne.Do(func() {
+			g.signal.SetLevel(s.Bars())
+			g.status.SetText(s.String())
+		})
+	})
+	if err != nil {
+		log.Printf("sync failed to start: %v", err)
+		g.status.SetText("Sync failed: " + err.Error())
+	}
 }

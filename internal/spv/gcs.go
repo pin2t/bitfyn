@@ -18,18 +18,18 @@ func filterKey(blockHash *chainhash.Hash) [16]byte {
 	return key
 }
 
-// filterHash is the double SHA256 of a serialized filter, the value peers
+// FilterHash is the double SHA256 of a serialized filter, the value peers
 // send in the cfheaders filter_hashes list and use to commit to the filter
 // data.
-func filterHash(data []byte) chainhash.Hash {
+func FilterHash(data []byte) chainhash.Hash {
 	var first = sha256.Sum256(data)
 	return chainhash.Hash(sha256.Sum256(first[:]))
 }
 
-// filterHeader chains a raw filter hash to the previous filter header:
+// FilterHeader chains a raw filter hash to the previous filter header:
 // SHA256d(raw || prev), per BIP157. The genesis filter chains to the null
 // hash. This is the value peers send as cfheaders.prev_filter_header.
-func filterHeader(raw, prev chainhash.Hash) chainhash.Hash {
+func FilterHeader(raw, prev chainhash.Hash) chainhash.Hash {
 	var buf [64]byte
 	copy(buf[:32], raw[:])
 	copy(buf[32:], prev[:])
@@ -37,9 +37,9 @@ func filterHeader(raw, prev chainhash.Hash) chainhash.Hash {
 	return chainhash.Hash(sha256.Sum256(first[:]))
 }
 
-// matchScripts decodes a serialized BIP158 basic filter and reports which of
+// MatchScripts decodes a serialized BIP158 basic filter and reports which of
 // the scripts are present in it.
-func matchScripts(data []byte, blockHash *chainhash.Hash, scripts [][]byte) ([]bool, error) {
+func MatchScripts(data []byte, blockHash *chainhash.Hash, scripts [][]byte) ([]bool, error) {
 	var filter, err = gcs.FromNBytes(gcsP, gcsM, data)
 	if err != nil {
 		return nil, fmt.Errorf("decode filter: %w", err)

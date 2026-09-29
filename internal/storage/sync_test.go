@@ -198,3 +198,40 @@ func TestUpgradeSchema(t *testing.T) {
 		t.Fatalf("FilterResumeHeight after header-only row = %d, %v; want 10", n, err)
 	}
 }
+
+// TestTransactions checks that wallet transactions round-trip in block order
+// and that a rewind drops the transactions and matches above the fork.
+func TestTransactions(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	var first = Transaction{Txid: chainhash.Hash{1}, Height: 7, BlockHash: chainhash.Hash{7}, Raw: []byte{1, 2}}
+	var second = Transaction{Txid: chainhash.Hash{2}, Height: 9, BlockHash: chainhash.Hash{9}, Raw: []byte{3}}
+	for _, tx := range []Transaction{second, first} {
+		if err := st.SaveTransaction(tx); err != nil {
+			t.Fatalf("SaveTransaction: %v", err)
+		}
+	}
+	var got, gerr = st.Transactions()
+	if gerr != nil || len(got) != 2 || got[0].Txid != first.Txid || got[1].BlockHash != second.BlockHash || string(got[0].Raw) != string(first.Raw) {
+		t.Fatalf("Transactions = %+v, %v", got, gerr)
+	}
+	if err := st.SaveMatch(Match{Height: 9, BlockHash: chainhash.Hash{9}, Address: "a", Script: []byte{1}}); err != nil {
+		t.Fatalf("SaveMatch: %v", err)
+	}
+	if err := st.DeleteTransactionsFrom(8); err != nil {
+		t.Fatalf("DeleteTransactionsFrom: %v", err)
+	}
+	if err := st.DeleteMatchesFrom(8); err != nil {
+		t.Fatalf("DeleteMatchesFrom: %v", err)
+	}
+	got, gerr = st.Transactions()
+	if gerr != nil || len(got) != 1 || got[0].Txid != first.Txid {
+		t.Fatalf("Transactions after rewind = %+v, %v", got, gerr)
+	}
+	if matches, err := st.Matches(); err != nil || len(matches) != 0 {
+		t.Fatalf("Matches after rewind = %+v, %v", matches, err)
+	}
+}

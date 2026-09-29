@@ -58,6 +58,12 @@ create table if not exists matches (
 	script    blob    not null,
 	primary key (height, address)
 );
+create table if not exists transactions (
+	txid      blob    primary key,
+	height    integer not null,
+	blockHash blob    not null,
+	raw       blob    not null
+);
 create table if not exists peers (
 	host      text    not null,
 	port      integer not null,

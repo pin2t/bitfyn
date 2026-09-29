@@ -22,9 +22,9 @@ func TestMatchScripts(t *testing.T) {
 	}
 	var blockHash chainhash.Hash
 	copy(blockHash[:16], key[:])
-	hits, err := matchScripts(data, &blockHash, [][]byte{scriptA, scriptB, {0x51}})
+	hits, err := MatchScripts(data, &blockHash, [][]byte{scriptA, scriptB, {0x51}})
 	if err != nil {
-		t.Fatalf("matchScripts: %v", err)
+		t.Fatalf("MatchScripts: %v", err)
 	}
 	if !hits[0] || !hits[1] || hits[2] {
 		t.Fatalf("hits = %v, want {true true false}", hits)
@@ -36,8 +36,8 @@ func TestFilterHash(t *testing.T) {
 	var data = []byte("bitfyn filter test")
 	var first = sha256.Sum256(data)
 	var want = sha256.Sum256(first[:])
-	if got := filterHash(data); got != chainhash.Hash(want) {
-		t.Fatalf("filterHash = %x, want %x", got, want)
+	if got := FilterHash(data); got != chainhash.Hash(want) {
+		t.Fatalf("FilterHash = %x, want %x", got, want)
 	}
 }
 
@@ -58,14 +58,14 @@ func TestFilterHeader(t *testing.T) {
 	if err3 != nil {
 		t.Fatalf("MakeHeaderForFilter: %v", err3)
 	}
-	if got := filterHeader(raw, prev); got != want {
-		t.Fatalf("filterHeader = %x, want %x", got, want)
+	if got := FilterHeader(raw, prev); got != want {
+		t.Fatalf("FilterHeader = %x, want %x", got, want)
 	}
 	var wantZero, err4 = builder.MakeHeaderForFilter(filter, chainhash.Hash{})
 	if err4 != nil {
 		t.Fatalf("MakeHeaderForFilter zero: %v", err4)
 	}
-	if got := filterHeader(raw, chainhash.Hash{}); got != wantZero {
-		t.Fatalf("genesis filterHeader = %x, want %x", got, wantZero)
+	if got := FilterHeader(raw, chainhash.Hash{}); got != wantZero {
+		t.Fatalf("genesis FilterHeader = %x, want %x", got, wantZero)
 	}
 }
