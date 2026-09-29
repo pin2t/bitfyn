@@ -61,7 +61,7 @@ func TestRotateIfUsed(t *testing.T) {
 }
 
 // TestShowBalance checks the large balance and the small grey pending note,
-// which is shown only while something is unconfirmed.
+// which is shown only while a payment is incoming unconfirmed.
 func TestShowBalance(t *testing.T) {
 	var app = test.NewApp()
 	defer app.Quit()
@@ -77,7 +77,7 @@ func TestShowBalance(t *testing.T) {
 	}
 	g.showBalance(1_000_000, 250_000)
 	var note = g.pending.Segments[0].(*widget.TextSegment)
-	if g.balance.Text != "1 250 000 sats" || note.Text != "(+250 000 sats pending)" || !g.pending.Visible() {
+	if g.balance.Text != "1 250 000 sats" || note.Text != "(250 000 sats pending)" || !g.pending.Visible() {
 		t.Fatalf("with pending: %q, %q, visible %v", g.balance.Text, note.Text, g.pending.Visible())
 	}
 	if note.Style.SizeName != theme.SizeNameCaptionText || note.Style.ColorName != theme.ColorNamePlaceHolder {
@@ -86,5 +86,9 @@ func TestShowBalance(t *testing.T) {
 	g.showBalance(1_250_000, 0)
 	if g.balance.Text != "1 250 000 sats" || g.pending.Visible() {
 		t.Fatalf("without pending: %q, note visible %v", g.balance.Text, g.pending.Visible())
+	}
+	g.showBalance(1_250_000, -50_000)
+	if g.balance.Text != "1 200 000 sats" || g.pending.Visible() {
+		t.Fatalf("pending spend: %q, note visible %v", g.balance.Text, g.pending.Visible())
 	}
 }
