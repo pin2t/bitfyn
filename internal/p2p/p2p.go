@@ -4,6 +4,7 @@
 // wallet's SPV sync needs.
 package p2p
 
+import "context"
 import "fmt"
 import "net"
 import "strconv"
@@ -32,8 +33,15 @@ func (a PeerAddr) String() string {
 // returned duration is the full handshake latency, dial included. The local
 // peer advertises no services: it is a light client.
 func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
+	return DialContext(context.Background(), params, address, listeners)
+}
+
+// DialContext is Dial that gives up as soon as the context is cancelled,
+// during the TCP dial as well as during the handshake.
+func DialContext(ctx context.Context, params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
 	var started = time.Now()
-	var conn, err = net.DialTimeout("tcp", address, HandshakeTimeout)
+	var dialer = net.Dialer{Timeout: HandshakeTimeout}
+	var conn, err = dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, 0, fmt.Errorf("dial peer %s: %w", address, err)
 	}
@@ -61,7 +69,13 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 		if !p.Connected() {
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			p.Disconnect()
+			p.WaitForDisconnect()
+			return nil, 0, fmt.Errorf("handshake with %s: %w", address, ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	p.Disconnect()
 	p.WaitForDisconnect()

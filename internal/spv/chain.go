@@ -124,10 +124,10 @@ func (c *Chain) Add(hdr *wire.BlockHeader) error {
 	return nil
 }
 
-// appendTrusted appends a header that was validated before it was persisted.
+// AppendTrusted appends a header that was validated before it was persisted.
 // The database is the wallet's own, so the full checks are skipped for speed
 // when reloading; only the prev-block linkage is verified.
-func (c *Chain) appendTrusted(hdr *wire.BlockHeader) error {
+func (c *Chain) AppendTrusted(hdr *wire.BlockHeader) error {
 	var height = int32(len(c.headers))
 	var hash = hdr.BlockHash()
 	if height == 0 {

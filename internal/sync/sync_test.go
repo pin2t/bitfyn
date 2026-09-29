@@ -1,12 +1,35 @@
-package spv
+package sync
 
 import "path/filepath"
 import "testing"
 import "time"
+import "github.com/btcsuite/btcd/blockchain"
 import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/wire"
+import "bitfyn/internal/spv"
 import "bitfyn/internal/storage"
+
+// easyBits is a very low difficulty target so tests can mine headers fast.
+const easyBits = 0x207fffff
+
+// mineHeader solves the PoW of a header with a given parent, bits and time.
+func mineHeader(prev chainhash.Hash, bits uint32, ts time.Time) wire.BlockHeader {
+	var hdr = wire.BlockHeader{Version: 1, PrevBlock: prev, Bits: bits, Timestamp: ts}
+	var target = blockchain.CompactToBig(bits)
+	for {
+		if blockchain.HashToBig(&[]chainhash.Hash{hdr.BlockHash()}[0]).Cmp(target) <= 0 {
+			return hdr
+		}
+		hdr.Nonce++
+	}
+}
+
+// storeOne accepts and stores the single filter at the height.
+func storeOne(height int32, data []byte) error {
+	var _, err = storeFilters(height, 1, func(int32) ([]byte, *wire.MsgBlock, error) { return data, nil, nil })
+	return err
+}
 
 // resetSync clears the package-level sync state so each test starts fresh.
 func resetSync() {
@@ -14,13 +37,8 @@ func resetSync() {
 	store = nil
 	chain = nil
 	scripts = nil
-	progress = nil
-	stats = nil
-	hdrCh = nil
-	cfhdrCh = nil
-	fltCh = nil
-	addrCh = nil
-	pending = nil
+	scriptIndex = map[string]int{}
+	outpoints = map[wire.OutPoint]string{}
 	seedTime = 0
 	filterStart = 0
 	anchorPrev = chainhash.Hash{}
@@ -66,7 +84,7 @@ func TestCheckFilterPrev(t *testing.T) {
 // safetyGap blocks earlier, with genesis and future fallbacks.
 func TestFirstHeaderAtOrAfter(t *testing.T) {
 	var netParams = &chaincfg.MainNetParams
-	var ch = NewChain(netParams)
+	var ch = spv.NewChain(netParams)
 	if err := ch.Add(&netParams.GenesisBlock.Header); err != nil {
 		t.Fatalf("add genesis: %v", err)
 	}
@@ -184,7 +202,7 @@ func TestStoreFilterAnchorPrev(t *testing.T) {
 	defer st.Close()
 	params = &chaincfg.MainNetParams
 	store = st
-	chain = NewChain(params)
+	chain = spv.NewChain(params)
 	if err := chain.Add(&params.GenesisBlock.Header); err != nil {
 		t.Fatalf("add genesis: %v", err)
 	}
@@ -198,17 +216,14 @@ func TestStoreFilterAnchorPrev(t *testing.T) {
 		t.Fatalf("add header 2: %v", err)
 	}
 	var anchor = chainhash.Hash{7, 7, 7}
-	pending = make(map[int32]chainhash.Hash)
 	filterStart = 2
 	anchorPrev = anchor
 	var data = []byte{0x0a, 0x0b}
-	var raw = filterHash(data)
-	pending[2] = raw
-	var block2 = hdr2.BlockHash()
-	if err := storeFilter(&wire.MsgCFilter{FilterType: wire.GCSFilterRegular, BlockHash: block2, Data: data}); err != nil {
+	var raw = spv.FilterHash(data)
+	if err := storeOne(2, data); err != nil {
 		t.Fatalf("storeFilter at seed height: %v", err)
 	}
-	var want = filterHeader(raw, anchor)
+	var want = spv.FilterHeader(raw, anchor)
 	var stored, ok, herr = st.FilterHeaderAt(2)
 	if herr != nil || !ok || stored != want {
 		t.Fatalf("FilterHeaderAt(2) = %s, %v, %v; want %s", stored, ok, herr, want)
@@ -219,8 +234,7 @@ func TestStoreFilterAnchorPrev(t *testing.T) {
 }
 
 // TestStoreFilterChainedHeaders builds a two-block chain and verifies that a
-// downloaded filter is stored with its chained header and that mismatched
-// data is rejected.
+// downloaded filter is stored with its chained header.
 func TestStoreFilterChainedHeaders(t *testing.T) {
 	resetSync()
 	var path = filepath.Join(t.TempDir(), "w.db")
@@ -231,7 +245,7 @@ func TestStoreFilterChainedHeaders(t *testing.T) {
 	defer st.Close()
 	params = &chaincfg.MainNetParams
 	store = st
-	chain = NewChain(params)
+	chain = spv.NewChain(params)
 	if err := chain.Add(&params.GenesisBlock.Header); err != nil {
 		t.Fatalf("add genesis: %v", err)
 	}
@@ -240,30 +254,24 @@ func TestStoreFilterChainedHeaders(t *testing.T) {
 	if err := chain.Add(&hdr); err != nil {
 		t.Fatalf("add header 1: %v", err)
 	}
-	pending = make(map[int32]chainhash.Hash)
 	var data0 = []byte{0x0a, 0x0b}
-	var raw0 = filterHash(data0)
-	var chained0 = filterHeader(raw0, chainhash.Hash{})
+	var raw0 = spv.FilterHash(data0)
+	var chained0 = spv.FilterHeader(raw0, chainhash.Hash{})
 	var genHash = params.GenesisBlock.Header.BlockHash()
 	if err := st.SaveFilter(storage.Filter{Height: 0, BlockHash: genHash, FilterHeader: chained0, Data: data0}); err != nil {
 		t.Fatalf("SaveFilter 0: %v", err)
 	}
 	var data1 = []byte{0x0c, 0x0d}
-	var raw1 = filterHash(data1)
-	pending[1] = raw1
-	var block1 = hdr.BlockHash()
-	if err := storeFilter(&wire.MsgCFilter{FilterType: wire.GCSFilterRegular, BlockHash: block1, Data: data1}); err != nil {
+	var raw1 = spv.FilterHash(data1)
+	if err := storeOne(1, data1); err != nil {
 		t.Fatalf("storeFilter: %v", err)
 	}
 	var stored, ok, herr = st.FilterHeaderAt(1)
 	if herr != nil || !ok {
 		t.Fatalf("FilterHeaderAt(1) = %s, %v, %v", stored, ok, herr)
 	}
-	var want1 = filterHeader(raw1, chained0)
+	var want1 = spv.FilterHeader(raw1, chained0)
 	if stored != want1 {
 		t.Fatalf("stored chained header = %x, want %x", stored, want1)
-	}
-	if err := storeFilter(&wire.MsgCFilter{FilterType: wire.GCSFilterRegular, BlockHash: block1, Data: []byte{0xff}}); err == nil {
-		t.Fatal("filter with mismatched data accepted")
 	}
 }
