@@ -8,10 +8,17 @@ import "github.com/btcsuite/btcd/peer"
 import "github.com/btcsuite/btcd/wire"
 import "bitfyn/internal/p2p"
 
+// stragglerGrace is the least time the other peers get to answer a parallel
+// request after the primary peer did. Beyond it a peer may take at most as
+// long as the primary took before it is dropped as too slow.
+var stragglerGrace = 5 * time.Second
+
 // conn is one peer connection with its own response channels, so several
-// peers can be queried at once without mixing their answers.
+// peers can be queried at once without mixing their answers. A pinned peer
+// was requested explicitly and is never dropped.
 type conn struct {
 	peer      *peer.Peer
+	pinned    bool
 	addr      string
 	host      string
 	port      uint16
@@ -43,7 +50,7 @@ func newConn(addr string) (*conn, error) {
 // dial connects and completes the handshake. quit is closed once the peer
 // disconnects, for whatever reason.
 func (c *conn) dial() (time.Duration, error) {
-	var p, handshake, err = p2p.Dial(params, c.addr, c.listeners())
+	var p, handshake, err = p2p.DialContext(dialCtx, params, c.addr, c.listeners())
 	if err != nil { return 0, err }
 	c.peer = p
 	go func() {
@@ -68,8 +75,13 @@ func (c *conn) live() bool {
 	}
 }
 
-// drop disconnects a peer that failed or misbehaved and logs why.
+// drop disconnects a peer that failed or misbehaved and logs why. The
+// pinned peer stays connected.
 func (c *conn) drop(reason string, err error) {
+	if c.pinned {
+		log.Printf("pinned peer %s: %s: %v; keeping it", c.addr, reason, err)
+		return
+	}
 	log.Printf("peer %s: %s: %v; disconnecting", c.addr, reason, err)
 	c.peer.Disconnect()
 }
@@ -258,25 +270,56 @@ func (c *conn) getBlock(hash chainhash.Hash) (*wire.MsgBlock, error) {
 	}
 }
 
-// fanOut runs the request against every peer at once. It returns the peers
-// that answered, in their original order, with their results; a peer whose
-// request failed is disconnected.
+// fanOut runs the request against every peer at once. peers[0] is the
+// primary: once it has answered, the others get as long as it took, and at
+// least stragglerGrace, to answer too. When the primary fails, the first
+// successful answer sets that pace instead. It returns the peers that
+// answered in time, in their original order, with their results; a peer
+// whose request failed or came too late is dropped.
 func fanOut[T any](peers []*conn, what string, request func(*conn) (T, error)) ([]*conn, []T) {
-	var results = make([]T, len(peers))
-	var errs = make([]error, len(peers))
-	var done = make(chan struct{}, len(peers))
+	type answer struct {
+		index  int
+		result T
+		err    error
+	}
+	var answers = make(chan answer, len(peers))
+	var started = time.Now()
 	for i, c := range peers {
 		go func() {
-			results[i], errs[i] = request(c)
-			done <- struct{}{}
+			var result, err = request(c)
+			answers <- answer{index: i, result: result, err: err}
 		}()
 	}
-	for range peers {
-		<-done
+	var results = make([]T, len(peers))
+	var errs = make([]error, len(peers))
+	var answered = make([]bool, len(peers))
+	var anyOK = false
+	var deadline <-chan time.Time
+	var grace time.Duration
+	for pending := len(peers); pending > 0; {
+		select {
+		case a := <-answers:
+			pending--
+			answered[a.index] = true
+			results[a.index] = a.result
+			errs[a.index] = a.err
+			anyOK = anyOK || a.err == nil
+			var paced = answered[0] && (errs[0] == nil || anyOK)
+			if deadline == nil && paced && pending > 0 {
+				grace = max(stragglerGrace, time.Since(started))
+				deadline = time.After(grace)
+			}
+		case <-deadline:
+			pending = 0
+		}
 	}
 	var okPeers []*conn
 	var okResults []T
 	for i, c := range peers {
+		if !answered[i] {
+			c.drop(what, fmt.Errorf("too slow, no answer within %s after the primary", grace.Round(time.Millisecond)))
+			continue
+		}
 		if errs[i] != nil {
 			c.drop(what, errs[i])
 			continue

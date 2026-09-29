@@ -74,18 +74,20 @@ func Init(network *chaincfg.Params, db *storage.Store) error {
 			return fmt.Errorf("store genesis: %w", err)
 		}
 	} else {
-		for height := int32(0); height < count; height++ {
-			var h, ok, err = store.HeaderAt(height)
-			if err != nil {
-				return fmt.Errorf("load header %d: %w", height, err)
-			}
-			if !ok {
-				return fmt.Errorf("stored chain has no header at height %d", height)
+		var next = int32(0)
+		err = store.Headers(func(h storage.Header) error {
+			if h.Height != next {
+				return fmt.Errorf("stored chain has no header at height %d", next)
 			}
 			var hdr = wireFromHeader(h)
 			if err := chain.AppendTrusted(&hdr); err != nil {
-				return fmt.Errorf("load header %d: %w", height, err)
+				return fmt.Errorf("load header %d: %w", h.Height, err)
 			}
+			next++
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("load headers: %w", err)
 		}
 	}
 	addresses, err := store.Addresses()
@@ -163,6 +165,21 @@ func NeedsAnchor() bool {
 	return filterStart > 0 && filterStart <= chain.Height()
 }
 
+// anchorPending reports whether the filter download will start at the
+// filter start height and so needs the anchor proven first. Once filters are
+// stored from that height on, the stored filter headers link the chain and
+// no anchor is needed.
+func anchorPending() (bool, error) {
+	if !NeedsAnchor() {
+		return false, nil
+	}
+	var resume, err = store.FilterResumeHeight(filterStart)
+	if err != nil {
+		return false, fmt.Errorf("filter resume height: %w", err)
+	}
+	return resume == filterStart, nil
+}
+
 // SetFilterAnchor stores the majority-proven anchor of the filter header
 // chain. The first cfheaders batch must then match it.
 func SetFilterAnchor(anchor chainhash.Hash) {
@@ -227,7 +244,8 @@ func syncHeaders(c *conn) (int32, error) {
 }
 
 // extendHeaders appends a peer batch to the chain, rewinding a shallow fork
-// if the batch does not continue from the tip. Filters, matches and wallet
+// if the batch does not continue from the tip. The validated headers are
+// stored in one transaction, including those before an invalid one. Filters, matches and wallet
 // transactions above the fork point are dropped with the rewound headers.
 func extendHeaders(batch []*wire.BlockHeader) error {
 	var first = batch[0].PrevBlock
@@ -239,14 +257,17 @@ func extendHeaders(batch []*wire.BlockHeader) error {
 		log.Printf("sync: reorg, rewinding from height %d to %d", chain.Height(), fork)
 		if err := rewindTo(fork); err != nil { return err }
 	}
+	var rows = make([]storage.Header, 0, len(batch))
+	var addErr error
 	for _, hdr := range batch {
-		if err := chain.Add(hdr); err != nil { return err }
-		var height = chain.Height()
-		if err := store.SaveHeader(headerFromWire(hdr, height)); err != nil {
-			return fmt.Errorf("store header %d: %w", height, err)
-		}
+		if addErr = chain.Add(hdr); addErr != nil { break }
+		rows = append(rows, headerFromWire(hdr, chain.Height()))
 	}
-	return nil
+	if err := store.SaveHeaders(rows); err != nil {
+		chain.Truncate(chain.Height() - int32(len(rows)))
+		return fmt.Errorf("store headers: %w", err)
+	}
+	return addErr
 }
 
 // rewindTo drops every header and every block-derived row above the height.

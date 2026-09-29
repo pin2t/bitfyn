@@ -235,3 +235,43 @@ func TestTransactions(t *testing.T) {
 		t.Fatalf("Matches after rewind = %+v, %v", matches, err)
 	}
 }
+
+// TestBatchWrites checks that header and filter batches are written in one
+// go and that headers stream back in height order.
+func TestBatchWrites(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	var headers = []Header{
+		{Height: 1, Hash: chainhash.Hash{1}, PrevHash: chainhash.Hash{0}, Timestamp: 11, Bits: 5, Nonce: 6},
+		{Height: 0, Hash: chainhash.Hash{0}, Timestamp: 10},
+		{Height: 2, Hash: chainhash.Hash{2}, PrevHash: chainhash.Hash{1}, MerkleRoot: chainhash.Hash{9}, Version: 4},
+	}
+	if err := st.SaveHeaders(headers); err != nil {
+		t.Fatalf("SaveHeaders: %v", err)
+	}
+	var got []Header
+	if err := st.Headers(func(h Header) error {
+		got = append(got, h)
+		return nil
+	}); err != nil {
+		t.Fatalf("Headers: %v", err)
+	}
+	if len(got) != 3 || got[0] != headers[1] || got[1] != headers[0] || got[2] != headers[2] {
+		t.Fatalf("Headers = %+v", got)
+	}
+	if err := st.SaveFilters([]Filter{
+		{Height: 5, BlockHash: chainhash.Hash{5}, FilterHeader: chainhash.Hash{50}},
+		{Height: 6, BlockHash: chainhash.Hash{6}, FilterHeader: chainhash.Hash{60}},
+	}); err != nil {
+		t.Fatalf("SaveFilters: %v", err)
+	}
+	if h, ok, err := st.FilterHeaderAt(6); err != nil || !ok || h != (chainhash.Hash{60}) {
+		t.Fatalf("FilterHeaderAt(6) = %s, %v, %v", h, ok, err)
+	}
+	if n, err := st.FilterResumeHeight(5); err != nil || n != 7 {
+		t.Fatalf("FilterResumeHeight(5) = %d, %v; want 7", n, err)
+	}
+}

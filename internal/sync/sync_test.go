@@ -25,6 +25,12 @@ func mineHeader(prev chainhash.Hash, bits uint32, ts time.Time) wire.BlockHeader
 	}
 }
 
+// storeOne accepts and stores the single filter at the height.
+func storeOne(height int32, data []byte) error {
+	var _, err = storeFilters(height, 1, func(int32) ([]byte, *wire.MsgBlock, error) { return data, nil, nil })
+	return err
+}
+
 // resetSync clears the package-level sync state so each test starts fresh.
 func resetSync() {
 	params = nil
@@ -214,7 +220,7 @@ func TestStoreFilterAnchorPrev(t *testing.T) {
 	anchorPrev = anchor
 	var data = []byte{0x0a, 0x0b}
 	var raw = spv.FilterHash(data)
-	if err := storeFilter(2, data, nil); err != nil {
+	if err := storeOne(2, data); err != nil {
 		t.Fatalf("storeFilter at seed height: %v", err)
 	}
 	var want = spv.FilterHeader(raw, anchor)
@@ -257,7 +263,7 @@ func TestStoreFilterChainedHeaders(t *testing.T) {
 	}
 	var data1 = []byte{0x0c, 0x0d}
 	var raw1 = spv.FilterHash(data1)
-	if err := storeFilter(1, data1, nil); err != nil {
+	if err := storeOne(1, data1); err != nil {
 		t.Fatalf("storeFilter: %v", err)
 	}
 	var stored, ok, herr = st.FilterHeaderAt(1)

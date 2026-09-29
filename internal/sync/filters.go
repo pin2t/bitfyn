@@ -23,8 +23,9 @@ type variant struct {
 // up to TargetPeers peers at once and compared per block, following the
 // BIP157 client guidance: a filter every peer agrees on is accepted, while a
 // disagreement is settled against the full block. Every stored filter is
-// pruned right after matching; only its chained header is kept. It returns
-// the number of new filters stored.
+// pruned right after matching; only its chained header is kept, and each
+// batch of rows is written in one transaction. It returns the number of new
+// filters stored.
 func syncFilters() (int32, error) {
 	RefreshFilterStart()
 	if err := store.PruneFilterDataFrom(filterStart); err != nil {
@@ -105,6 +106,9 @@ func filterHashes(start, end int32) ([]*conn, [][]chainhash.Hash, error) {
 	if len(okPeers) == 0 {
 		return nil, nil, fmt.Errorf("no peer served a filter header chain linking to height %d", start-1)
 	}
+	if err := requirePrimary(okPeers); err != nil {
+		return nil, nil, err
+	}
 	return okPeers, hashes, nil
 }
 
@@ -133,17 +137,20 @@ func syncFilterBatch(peers []*conn, hashes [][]chainhash.Hash, base, fStart, fEn
 	if len(peers) == 0 {
 		return 0, fmt.Errorf("every peer failed the cfilters request")
 	}
+	if err := requirePrimary(peers); err != nil {
+		return 0, err
+	}
 	if len(peers) == 1 && fStart == base {
 		log.Printf("sync: filters %d-%d from %s alone, no second peer to cross-check", fStart, fEnd, peers[0].addr)
 	}
 	var mismatches = 0
-	for i := range fEnd - fStart + 1 {
-		var height = fStart + i
+	var n, err = storeFilters(fStart, fEnd-fStart+1, func(i int32) ([]byte, *wire.MsgBlock, error) {
 		var variants = groupVariants(peers, got, int(i))
 		if len(variants) > 1 { mismatches++ }
-		if err := acceptFilter(height, variants); err != nil {
-			return i, err
-		}
+		return chooseFilter(fStart+i, variants)
+	})
+	if err != nil {
+		return n, err
 	}
 	if len(peers) > 1 {
 		log.Printf("sync: filters %d-%d cross-checked with %d peers, %d mismatches", fStart, fEnd, len(peers), mismatches)
@@ -170,11 +177,12 @@ func groupVariants(peers []*conn, got [][][]byte, index int) []*variant {
 	return variants
 }
 
-// acceptFilter picks the filter of the block at the height and stores it.
-// When the peers disagree, the full block is downloaded and verified, every
+// chooseFilter picks the filter of the block at the height. When the peers
+// disagree, the full block is downloaded and verified, every
 // variant is checked to contain all of the block's output scripts, and the
-// peers that served an invalid or outvoted filter are disconnected.
-func acceptFilter(height int32, variants []*variant) error {
+// peers that served an invalid or outvoted filter are disconnected. The
+// verified block is returned too when it had to be downloaded.
+func chooseFilter(height int32, variants []*variant) ([]byte, *wire.MsgBlock, error) {
 	var chosen = variants[0]
 	var block *wire.MsgBlock
 	if len(variants) > 1 {
@@ -183,7 +191,7 @@ func acceptFilter(height int32, variants []*variant) error {
 		var err error
 		block, err = fetchBlock(height)
 		if err != nil {
-			return fmt.Errorf("resolve filter mismatch at height %d: %w", height, err)
+			return nil, nil, fmt.Errorf("resolve filter mismatch at height %d: %w", height, err)
 		}
 		var winner, valid, rerr = resolveVariants(variants, block)
 		if rerr != nil {
@@ -192,7 +200,7 @@ func acceptFilter(height int32, variants []*variant) error {
 					c.drop(fmt.Sprintf("filter at height %d", height), rerr)
 				}
 			}
-			return fmt.Errorf("height %d: %w", height, rerr)
+			return nil, nil, fmt.Errorf("height %d: %w", height, rerr)
 		}
 		chosen = variants[winner]
 		log.Printf("sync: filter mismatch at height %d resolved against the full block: using %s from %s",
@@ -208,7 +216,7 @@ func acceptFilter(height int32, variants []*variant) error {
 			}
 		}
 	}
-	return storeFilter(height, chosen.data, block)
+	return chosen.data, block, nil
 }
 
 // resolveVariants checks every filter variant against the verified block. A
@@ -259,27 +267,55 @@ func filterHasOutputs(data []byte, blockHash *chainhash.Hash, block *wire.MsgBlo
 	return true, nil
 }
 
-// storeFilter stores the accepted filter of the block at the height with its
-// chained filter header, after matching it against the wallet scripts. On a
-// match the block is downloaded, when it is not at hand yet, and the wallet
-// transactions in it are stored. The filter row is written last, so an
-// interrupted sync redoes the whole block. The filter data is pruned right
-// after the row is stored.
-func storeFilter(height int32, data []byte, block *wire.MsgBlock) error {
+// storeFilters accepts count consecutive filters from fStart, as picked one
+// by one, and stores their rows in one transaction. The chained filter
+// headers are linked in memory from the stored predecessor of fStart. Rows
+// accepted before an error are still stored. It returns the number stored.
+func storeFilters(fStart, count int32, pick func(i int32) ([]byte, *wire.MsgBlock, error)) (int32, error) {
+	var prev, err = prevFilterHeader(fStart)
+	if err != nil { return 0, err }
+	var rows = make([]storage.Filter, 0, count)
+	var failed error
+	for i := range count {
+		var data, block, err = pick(i)
+		if err != nil {
+			failed = err
+			break
+		}
+		row, err := applyFilter(fStart+i, data, block, prev)
+		if err != nil {
+			failed = err
+			break
+		}
+		rows = append(rows, row)
+		prev = row.FilterHeader
+	}
+	if len(rows) > 0 {
+		if err := store.SaveFilters(rows); err != nil {
+			return 0, fmt.Errorf("store filters %d-%d: %w", fStart, fStart+int32(len(rows))-1, err)
+		}
+	}
+	return int32(len(rows)), failed
+}
+
+// applyFilter matches the accepted filter of the block at the height against
+// the wallet scripts and returns its row, chained to prev. On a match the
+// block is downloaded, when it is not at hand yet, and the wallet
+// transactions in it are stored. The row carries no filter data: filters are
+// pruned right after matching, only the chained header is kept.
+func applyFilter(height int32, data []byte, block *wire.MsgBlock, prev chainhash.Hash) (storage.Filter, error) {
 	var hdr, ok = chain.HeaderAt(height)
 	if !ok {
-		return fmt.Errorf("no header at height %d", height)
+		return storage.Filter{}, fmt.Errorf("no header at height %d", height)
 	}
-	var prev, err = prevFilterHeader(height)
-	if err != nil { return err }
-	var header = spv.FilterHeader(spv.FilterHash(data), prev)
+	var row = storage.Filter{Height: height, BlockHash: hdr.Hash, FilterHeader: spv.FilterHeader(spv.FilterHash(data), prev)}
 	var scriptBytes = make([][]byte, len(scripts))
 	for i, w := range scripts {
 		scriptBytes[i] = w.script
 	}
-	hits, err := spv.MatchScripts(data, &hdr.Hash, scriptBytes)
+	var hits, err = spv.MatchScripts(data, &hdr.Hash, scriptBytes)
 	if err != nil {
-		return fmt.Errorf("match filter at height %d: %w", height, err)
+		return row, fmt.Errorf("match filter at height %d: %w", height, err)
 	}
 	var matched []watchScript
 	for i, hit := range hits {
@@ -291,28 +327,22 @@ func storeFilter(height int32, data []byte, block *wire.MsgBlock) error {
 	if len(matched) > 0 && block == nil {
 		block, err = fetchBlock(height)
 		if err != nil {
-			return fmt.Errorf("download matched block %d: %w", height, err)
+			return row, fmt.Errorf("download matched block %d: %w", height, err)
 		}
 	}
 	if block != nil {
 		var n, err = processBlock(height, block)
-		if err != nil { return err }
+		if err != nil { return row, err }
 		if len(matched) > 0 && n == 0 {
 			log.Printf("match: block %d holds no wallet transaction (filter false positive)", height)
 		}
 	}
 	for _, w := range matched {
 		if err := store.SaveMatch(storage.Match{Height: height, BlockHash: hdr.Hash, Address: w.address, Script: w.script}); err != nil {
-			return fmt.Errorf("store match at height %d: %w", height, err)
+			return row, fmt.Errorf("store match at height %d: %w", height, err)
 		}
 	}
-	if err := store.SaveFilter(storage.Filter{Height: height, BlockHash: hdr.Hash, FilterHeader: header, Data: data}); err != nil {
-		return fmt.Errorf("store filter at height %d: %w", height, err)
-	}
-	if err := store.PruneFilterData(height); err != nil {
-		return fmt.Errorf("prune filter at height %d: %w", height, err)
-	}
-	return nil
+	return row, nil
 }
 
 func describeVariants(variants []*variant) string {

@@ -70,6 +70,48 @@ func (s *Store) SaveHeader(h Header) error {
 	return err
 }
 
+// SaveHeaders persists a batch of validated headers in one transaction,
+// replacing any rows at the same heights.
+func (s *Store) SaveHeaders(headers []Header) error {
+	var tx, err = s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(
+		`insert or replace into headers (height, hash, prevHash, merkleRoot, version, timestamp, bits, nonce)
+		 values (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil { return err }
+	defer stmt.Close()
+	for _, h := range headers {
+		if _, err := stmt.Exec(h.Height, h.Hash[:], h.PrevHash[:], h.MerkleRoot[:], h.Version, h.Timestamp, h.Bits, h.Nonce); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Headers streams every stored header in height order to the callback,
+// reading them with a single query. An error from the callback stops the
+// iteration and is returned.
+func (s *Store) Headers(fn func(Header) error) error {
+	var rows, err = s.db.Query(`select height, hash, prevHash, merkleRoot, version, timestamp, bits, nonce from headers order by height`)
+	if err != nil { return err }
+	defer rows.Close()
+	for rows.Next() {
+		var h Header
+		var hash []byte
+		var prev []byte
+		var root []byte
+		if err := rows.Scan(&h.Height, &hash, &prev, &root, &h.Version, &h.Timestamp, &h.Bits, &h.Nonce); err != nil {
+			return err
+		}
+		copy(h.Hash[:], hash)
+		copy(h.PrevHash[:], prev)
+		copy(h.MerkleRoot[:], root)
+		if err := fn(h); err != nil { return err }
+	}
+	return rows.Err()
+}
+
 // HeaderAt returns the stored header at the height, if any.
 func (s *Store) HeaderAt(height int32) (Header, bool, error) {
 	var h Header
@@ -121,6 +163,22 @@ func (s *Store) SaveFilter(f Filter) error {
 		f.Height, f.BlockHash[:], f.FilterHeader[:], f.Data,
 	)
 	return err
+}
+
+// SaveFilters persists a batch of verified filter rows in one transaction.
+func (s *Store) SaveFilters(filters []Filter) error {
+	var tx, err = s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`insert or replace into cfilters (height, blockHash, filterHeader, filterData) values (?, ?, ?, ?)`)
+	if err != nil { return err }
+	defer stmt.Close()
+	for _, f := range filters {
+		if _, err := stmt.Exec(f.Height, f.BlockHash[:], f.FilterHeader[:], f.Data); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // PruneFilterData drops the filter data at the given height, leaving only the

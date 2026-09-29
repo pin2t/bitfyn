@@ -1,5 +1,6 @@
 package sync
 
+import "context"
 import "fmt"
 import "log"
 import "math/rand/v2"
@@ -18,8 +19,14 @@ import "bitfyn/internal/storage"
 const TargetPeers = 3
 
 // anchorPeerLimit is how many peers are asked for the first filter header
-// when majority proving the filter header chain anchor.
+// when majority proving the filter header chain anchor; anchorDialers is how
+// many of them are dialed at once.
 const anchorPeerLimit = 10
+const anchorDialers = 8
+
+// pinnedMaxBackoff caps the delay between reconnect attempts to the pinned
+// peer.
+const pinnedMaxBackoff = time.Minute
 
 // retryDelay paces reconnect attempts and failed sync rounds.
 const retryDelay = 5 * time.Second
@@ -74,9 +81,11 @@ var height int32
 var notify func(Status)
 var stopped = true
 var stop chan struct{}
+var dialCtx = context.Background()
+var cancelDials context.CancelFunc = func() {}
 var wake chan struct{}
 var poolChanged chan struct{}
-var explicitPeer string
+var pinnedAddr string
 var candidates []string
 var candNext int
 var anchorTried bool
@@ -85,11 +94,14 @@ var anchorTried bool
 // background: it keeps TargetPeers peers connected, syncs headers and filters
 // and then stays connected to follow new blocks. Every change of the
 // connection count or sync activity is reported through onStatus, from any
-// goroutine. explicit is an optional host:port peer that is tried first.
-func Start(network *chaincfg.Params, db *storage.Store, explicit string, onStatus func(Status)) error {
-	if explicit != "" {
-		if _, _, err := net.SplitHostPort(explicit); err != nil {
-			return fmt.Errorf("peer address %q must include a port", explicit)
+// goroutine. pinned is an optional host:port peer that is assumed to be
+// always available: it is never dropped or replaced, it is reconnected
+// whenever the connection is lost, and headers and filters are always synced
+// from it. The other peers only cross-check its filters.
+func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus func(Status)) error {
+	if pinned != "" {
+		if _, _, err := net.SplitHostPort(pinned); err != nil {
+			return fmt.Errorf("peer address %q must include a port", pinned)
 		}
 	}
 	if err := Init(network, db); err != nil { return err }
@@ -100,17 +112,20 @@ func Start(network *chaincfg.Params, db *storage.Store, explicit string, onStatu
 	notify = onStatus
 	stopped = false
 	stop = make(chan struct{})
+	dialCtx, cancelDials = context.WithCancel(context.Background())
 	wake = make(chan struct{}, 1)
 	poolChanged = make(chan struct{}, 1)
-	explicitPeer = explicit
+	pinnedAddr = pinned
 	candidates = nil
 	candNext = 0
 	anchorTried = false
 	wg.Add(2)
+	if pinned != "" { wg.Add(1) }
 	mu.Unlock()
 	emit()
 	go maintain()
 	go syncLoop()
+	if pinned != "" { go keepPinned() }
 	return nil
 }
 
@@ -124,6 +139,7 @@ func Stop() {
 	}
 	stopped = true
 	close(stop)
+	cancelDials()
 	var open = append([]*conn(nil), pool...)
 	mu.Unlock()
 	for _, c := range open {
@@ -182,7 +198,8 @@ func pause(delay time.Duration) bool {
 }
 
 // maintain keeps the pool filled up to TargetPeers, dialing the next
-// candidates concurrently.
+// candidates concurrently. While a pinned peer is set, one slot is kept for
+// it; keepPinned dials it on its own.
 func maintain() {
 	defer wg.Done()
 	for {
@@ -192,6 +209,7 @@ func maintain() {
 		default:
 		}
 		var need = TargetPeers - poolSize()
+		if pinnedAddr != "" && pinnedConn() == nil { need-- }
 		var wait = retryDelay
 		if need > 0 {
 			var addrs = takeCandidates(need)
@@ -200,7 +218,7 @@ func maintain() {
 				dials.Add(1)
 				go func() {
 					defer dials.Done()
-					connect(addr)
+					connect(addr, false)
 				}()
 			}
 			dials.Wait()
@@ -212,6 +230,30 @@ func maintain() {
 		case <-poolChanged:
 		case <-time.After(wait):
 		}
+	}
+}
+
+// keepPinned keeps the pinned peer connected: it dials it, waits for the
+// connection to drop and dials again, backing off while it is unreachable.
+func keepPinned() {
+	defer wg.Done()
+	var backoff = retryDelay
+	for {
+		if connect(pinnedAddr, true) {
+			backoff = retryDelay
+			var c = pinnedConn()
+			if c != nil {
+				select {
+				case <-stop:
+					return
+				case <-c.quit:
+				}
+			}
+			continue
+		}
+		log.Printf("pinned peer %s: retrying in %s", pinnedAddr, backoff)
+		if !pause(backoff) { return }
+		backoff = min(backoff*2, pinnedMaxBackoff)
 	}
 }
 
@@ -237,18 +279,55 @@ func livePeers(peers []*conn) []*conn {
 	return out
 }
 
-// primary returns the connected peer that drives the header sync.
-func primary() *conn {
+// pinnedConn returns the connected pinned peer, if any.
+func pinnedConn() *conn {
+	for _, c := range livePeers(poolPeers()) {
+		if c.pinned { return c }
+	}
+	return nil
+}
+
+// orderedPeers returns the connected peers with the primary first: the
+// pinned peer when one is set, the oldest connection otherwise.
+func orderedPeers() []*conn {
 	var peers = livePeers(poolPeers())
+	var out = make([]*conn, 0, len(peers))
+	for _, c := range peers {
+		if c.pinned { out = append(out, c) }
+	}
+	for _, c := range peers {
+		if !c.pinned { out = append(out, c) }
+	}
+	return out
+}
+
+// primary returns the connected peer that drives the sync. With a pinned
+// peer set, only the pinned peer qualifies: nil means waiting for it.
+func primary() *conn {
+	if pinnedAddr != "" {
+		return pinnedConn()
+	}
+	var peers = orderedPeers()
 	if len(peers) == 0 { return nil }
 	return peers[0]
 }
 
 // filterPeers returns up to TargetPeers connected peers to download and
-// cross-check filters from, the primary first.
+// cross-check filters from, the primary first. It is empty while a pinned
+// peer is set but not connected.
 func filterPeers() []*conn {
-	var peers = livePeers(poolPeers())
+	if primary() == nil { return nil }
+	var peers = orderedPeers()
 	return peers[:min(len(peers), TargetPeers)]
+}
+
+// requirePrimary fails when a pinned peer is set but is not among the peers
+// that answered a request: headers and filters are always synced from it.
+func requirePrimary(peers []*conn) error {
+	if pinnedAddr == "" || (len(peers) > 0 && peers[0].pinned) {
+		return nil
+	}
+	return fmt.Errorf("pinned peer %s did not answer", pinnedAddr)
 }
 
 // takeCandidates returns up to n candidate addresses not already connected,
@@ -269,7 +348,7 @@ func takeCandidates(n int) []string {
 		var exhausted = candNext >= len(candidates)
 		mu.Unlock()
 		if !exhausted || len(taken) >= n { break }
-		var fresh, err = peerCandidates(params, store, explicitPeer)
+		var fresh, err = peerCandidates(params, store, pinnedAddr)
 		if err != nil {
 			log.Printf("peer discovery: %v", err)
 			break
@@ -282,18 +361,20 @@ func takeCandidates(n int) []string {
 	return taken
 }
 
-// connect dials one candidate and adds it to the pool. A peer without the
-// compact filters service is dropped after its services are stored.
-func connect(addr string) {
+// connect dials one candidate and adds it to the pool, reporting whether it
+// joined. A peer without the compact filters service is dropped after its
+// services are stored.
+func connect(addr string, pinned bool) bool {
 	var c, err = newConn(addr)
-	if err != nil { return }
+	if err != nil { return false }
+	c.pinned = pinned
 	handshake, err := c.dial()
 	if err != nil {
 		log.Printf("peer %s: connect failed: %v", addr, err)
 		if rerr := store.RecordPeerResult(c.host, c.port, false, 0); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
 		}
-		return
+		return false
 	}
 	var p = c.peer
 	var flags = uint64(p.Services())
@@ -303,21 +384,23 @@ func connect(addr string) {
 	if flags&uint64(wire.SFNodeCF) == 0 {
 		log.Printf("peer %s: no compact filter service (%s), disconnecting", addr, p.Services())
 		c.close()
-		return
+		return false
 	}
 	p.QueueMessage(wire.NewMsgGetAddr(), nil)
 	mu.Lock()
 	if stopped {
 		mu.Unlock()
 		c.close()
-		return
+		return false
 	}
 	pool = append(pool, c)
 	var count = len(pool)
 	wg.Add(1)
 	mu.Unlock()
-	log.Printf("peer %s connected: %s, height %d, services %s, handshake %s (%d connected)",
-		addr, p.UserAgent(), p.LastBlock(), p.Services(), handshake.Round(time.Millisecond), count)
+	var kind = "peer"
+	if pinned { kind = "pinned peer" }
+	log.Printf("%s %s connected: %s, height %d, services %s, handshake %s (%d connected)",
+		kind, addr, p.UserAgent(), p.LastBlock(), p.Services(), handshake.Round(time.Millisecond), count)
 	emit()
 	wakeSync()
 	go func() {
@@ -327,10 +410,11 @@ func connect(addr string) {
 		pool = slices.DeleteFunc(pool, func(other *conn) bool { return other == c })
 		var left = len(pool)
 		mu.Unlock()
-		log.Printf("peer %s disconnected (%d connected)", addr, left)
+		log.Printf("%s %s disconnected (%d connected)", kind, addr, left)
 		emit()
 		notifyPool()
 	}()
+	return true
 }
 
 // syncLoop syncs against one pool peer whenever a new block is announced, a
@@ -357,7 +441,7 @@ func syncLoop() {
 		report(StateIdle, chain.Height())
 		if err != nil {
 			log.Printf("sync: round failed: %v", err)
-			if !pause(time.Second) { return }
+			if !pause(retryDelay) { return }
 			continue
 		}
 		select {
@@ -384,7 +468,9 @@ func syncOnce(c *conn) error {
 		log.Printf("sync: headers synced to %d from %s", chain.Height(), c.addr)
 	}
 	RefreshFilterStart()
-	if NeedsAnchor() && !anchorTried {
+	var needsAnchor, err = anchorPending()
+	if err != nil { return err }
+	if needsAnchor && !anchorTried {
 		report(StateFilters, FilterStart())
 		var anchor, ok, err = proveFilterAnchor()
 		if err != nil {
@@ -398,7 +484,7 @@ func syncOnce(c *conn) error {
 			log.Printf("sync: no peer answered the filter header anchor request; the filter peers will be trusted")
 		}
 	}
-	var n, err = syncFilters()
+	n, err := syncFilters()
 	if err != nil {
 		return fmt.Errorf("filters: %w", err)
 	}
@@ -409,43 +495,65 @@ func syncOnce(c *conn) error {
 }
 
 // proveFilterAnchor asks up to anchorPeerLimit peers for the first filter
-// header and returns the value reported by a strict majority. ok is false
-// when no peer responded; the caller then falls back to trusting the first
-// filter peer. Peers disagreeing without a majority are an error.
+// header and returns the value reported by a strict majority. The connected
+// peers are asked first, all at once; further candidates are then dialed
+// anchorDialers at a time until enough votes are in. ok is false when no peer
+// responded; the caller then falls back to the filter peers. Peers
+// disagreeing without a majority are an error.
 func proveFilterAnchor() (chainhash.Hash, bool, error) {
-	mu.Lock()
-	var list = append([]string(nil), candidates...)
-	mu.Unlock()
-	var votes []chainhash.Hash
-	for _, addr := range list {
-		if len(votes) >= anchorPeerLimit { break }
-		select {
-		case <-stop:
-			return chainhash.Hash{}, false, fmt.Errorf("stopped")
-		default:
-		}
-		var pc, perr = newConn(addr)
-		if perr != nil { continue }
-		if _, derr := pc.dial(); derr != nil {
-			_ = store.RecordPeerResult(pc.host, pc.port, false, 0)
-			continue
-		}
-		var flags = uint64(pc.peer.Services())
-		if serr := store.UpdatePeerServices(pc.host, pc.port, flags); serr != nil {
-			log.Printf("store peer %s: %v", addr, serr)
-		}
-		if flags&uint64(wire.SFNodeCF) == 0 {
-			pc.close()
-			continue
-		}
-		var anchor, aerr = requestFilterAnchor(pc)
-		pc.close()
-		if aerr != nil {
-			log.Printf("peer %s: filter header anchor: %v", addr, aerr)
-			continue
-		}
-		votes = append(votes, anchor)
+	var connected = filterPeers()
+	var answered, votes = fanOut(connected, "filter header anchor", requestFilterAnchor)
+	var inPool = make(map[string]bool)
+	for _, c := range poolPeers() {
+		inPool[c.addr] = true
 	}
+	mu.Lock()
+	var list []string
+	for _, addr := range candidates {
+		if !inPool[addr] { list = append(list, addr) }
+	}
+	mu.Unlock()
+	var votesMu sync.Mutex
+	var enough = func() bool {
+		votesMu.Lock()
+		defer votesMu.Unlock()
+		return len(votes) >= anchorPeerLimit
+	}
+	var work = make(chan string)
+	var workers sync.WaitGroup
+	var dialed = 0
+	for range anchorDialers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for addr := range work {
+				if enough() { continue }
+				var anchor, err = dialAnchor(addr)
+				if err != nil { continue }
+				votesMu.Lock()
+				votes = append(votes, anchor)
+				dialed++
+				votesMu.Unlock()
+			}
+		}()
+	}
+feed:
+	for _, addr := range list {
+		if enough() { break }
+		select {
+		case work <- addr:
+		case <-stop:
+			break feed
+		}
+	}
+	close(work)
+	workers.Wait()
+	select {
+	case <-stop:
+		return chainhash.Hash{}, false, fmt.Errorf("stopped")
+	default:
+	}
+	log.Printf("sync: filter header anchor votes: %d from connected peers, %d from dialed peers", len(answered), dialed)
 	if len(votes) == 0 {
 		return chainhash.Hash{}, false, nil
 	}
@@ -456,21 +564,41 @@ func proveFilterAnchor() (chainhash.Hash, bool, error) {
 	return anchor, true, nil
 }
 
-// peerCandidates builds the ordered list of peers to try: the explicit
-// address first when given, then stored and freshly discovered peers in random
-// order. Stored peers that are known not to serve compact filters are skipped.
-func peerCandidates(network *chaincfg.Params, db *storage.Store, explicit string) ([]string, error) {
+// dialAnchor connects to one candidate just long enough to ask it for the
+// filter header anchor.
+func dialAnchor(addr string) (chainhash.Hash, error) {
+	var c, err = newConn(addr)
+	if err != nil { return chainhash.Hash{}, err }
+	if _, err := c.dial(); err != nil {
+		_ = store.RecordPeerResult(c.host, c.port, false, 0)
+		return chainhash.Hash{}, err
+	}
+	defer c.close()
+	var flags = uint64(c.peer.Services())
+	if err := store.UpdatePeerServices(c.host, c.port, flags); err != nil {
+		log.Printf("store peer %s: %v", addr, err)
+	}
+	if flags&uint64(wire.SFNodeCF) == 0 {
+		return chainhash.Hash{}, fmt.Errorf("no compact filter service")
+	}
+	var anchor, aerr = requestFilterAnchor(c)
+	if aerr != nil {
+		log.Printf("peer %s: filter header anchor: %v", addr, aerr)
+	}
+	return anchor, aerr
+}
+
+// peerCandidates builds the list of peers to fill the pool with: stored and
+// freshly discovered peers in random order, without the pinned peer, which is
+// dialed on its own. Stored peers that are known not to serve compact filters
+// are skipped. An empty list is an error only without a pinned peer.
+func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string) ([]string, error) {
 	var list []string
-	var seen = make(map[string]bool)
+	var seen = map[string]bool{pinned: true}
 	var add = func(addr string) {
 		if addr == "" || seen[addr] { return }
 		seen[addr] = true
 		list = append(list, addr)
-	}
-	var start = 0
-	if explicit != "" {
-		add(explicit)
-		start = 1
 	}
 	var stored, err = db.Peers()
 	if err != nil { return nil, err }
@@ -481,10 +609,10 @@ func peerCandidates(network *chaincfg.Params, db *storage.Store, explicit string
 	for _, seed := range p2p.Seeds(network) {
 		add(seed.String())
 	}
-	rand.Shuffle(len(list)-start, func(i, j int) {
-		list[start+i], list[start+j] = list[start+j], list[start+i]
+	rand.Shuffle(len(list), func(i, j int) {
+		list[i], list[j] = list[j], list[i]
 	})
-	if len(list) == 0 {
+	if len(list) == 0 && pinned == "" {
 		return nil, fmt.Errorf("no peer addresses for network %s (pass -peer or run a local node)", network.Name)
 	}
 	return list, nil

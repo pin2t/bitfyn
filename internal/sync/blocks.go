@@ -10,14 +10,14 @@ import "github.com/btcsuite/btcd/wire"
 import "bitfyn/internal/storage"
 
 // fetchBlock downloads the block at the height from the connected peers in
-// turn and returns the first copy that verifies against the header chain. A
+// turn, the primary first, and returns the first copy that verifies against the header chain. A
 // peer serving a block that fails verification is disconnected.
 func fetchBlock(height int32) (*wire.MsgBlock, error) {
 	var hdr, ok = chain.HeaderAt(height)
 	if !ok {
 		return nil, fmt.Errorf("no header at height %d", height)
 	}
-	var peers = livePeers(poolPeers())
+	var peers = orderedPeers()
 	if len(peers) == 0 {
 		return nil, fmt.Errorf("no connected peers")
 	}
