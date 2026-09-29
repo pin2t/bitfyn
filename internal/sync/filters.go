@@ -309,8 +309,9 @@ func applyFilter(height int32, data []byte, block *wire.MsgBlock, prev chainhash
 		return storage.Filter{}, fmt.Errorf("no header at height %d", height)
 	}
 	var row = storage.Filter{Height: height, BlockHash: hdr.Hash, FilterHeader: spv.FilterHeader(spv.FilterHash(data), prev)}
-	var scriptBytes = make([][]byte, len(scripts))
-	for i, w := range scripts {
+	var watched = watchedScripts()
+	var scriptBytes = make([][]byte, len(watched))
+	for i, w := range watched {
 		scriptBytes[i] = w.script
 	}
 	var hits, err = spv.MatchScripts(data, &hdr.Hash, scriptBytes)
@@ -319,7 +320,7 @@ func applyFilter(height int32, data []byte, block *wire.MsgBlock, prev chainhash
 	}
 	var matched []watchScript
 	for i, hit := range hits {
-		if hit { matched = append(matched, scripts[i]) }
+		if hit { matched = append(matched, watched[i]) }
 	}
 	for _, w := range matched {
 		log.Printf("match: filter of block %d (%s) matches address %s", height, hdr.Hash, w.address)

@@ -29,15 +29,16 @@ func TestFormatAmount(t *testing.T) {
 	}
 }
 
-// TestBalanceText checks the pending suffix of the balance line.
+// TestBalanceText checks that pending amounts count in the balance and are
+// named in the suffix.
 func TestBalanceText(t *testing.T) {
 	if got := balanceText(1_234_567, 0); got != "1 234 567 sats" {
 		t.Errorf("no pending: %q", got)
 	}
-	if got := balanceText(0, 25_000_000); got != "0 sats (+0.25 BTC pending)" {
+	if got := balanceText(0, 25_000_000); got != "0.25 BTC (+0.25 BTC pending)" {
 		t.Errorf("incoming: %q", got)
 	}
-	if got := balanceText(10_000_000, -2_000); got != "0.1 BTC (-2 000 sats pending)" {
+	if got := balanceText(10_000_000, -2_000); got != "0.09998 BTC (-2 000 sats pending)" {
 		t.Errorf("outgoing: %q", got)
 	}
 }

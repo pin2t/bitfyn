@@ -148,8 +148,8 @@ func (g *gui) content() fyne.CanvasObject {
 	)
 }
 
-// refreshAddress derives the current address and updates QR, labels and the
-// address table.
+// refreshAddress derives the current address, updates QR, labels and the
+// address table, and has the sync watch the address.
 func (g *gui) refreshAddress() error {
 	var address, path, pubkey, err = g.wallet.DeriveAddress(g.index)
 	if err != nil {
@@ -162,6 +162,7 @@ func (g *gui) refreshAddress() error {
 	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
+	sync.Watch(address, pubkey)
 	return nil
 }
 
@@ -173,10 +174,30 @@ func (g *gui) startSync(peer string) {
 			g.signal.SetLevel(s.Bars())
 			g.status.SetText(s.String())
 			g.balance.SetText(balanceText(s.Balance, s.Pending))
+			g.rotateIfUsed()
 		})
 	})
 	if err != nil {
 		log.Printf("sync failed to start: %v", err)
 		g.status.SetText("Sync failed: " + err.Error())
+	}
+}
+
+// rotateIfUsed moves on to the next address once the displayed one has
+// received a payment, confirmed or pending, so every payment goes to a fresh
+// address. The new index is saved and the address is watched by the sync.
+func (g *gui) rotateIfUsed() {
+	for sync.IsUsed(g.addr.Text) {
+		var used = g.addr.Text
+		g.index++
+		if err := g.store.UpdateNextIndex(g.index); err != nil {
+			dialog.ShowError(fmt.Errorf("save next address index: %w", err), g.window)
+			return
+		}
+		if err := g.refreshAddress(); err != nil {
+			dialog.ShowError(err, g.window)
+			return
+		}
+		log.Printf("address %s received a payment, showing next address %s (index %d)", used, g.addr.Text, g.index)
 	}
 }
