@@ -52,14 +52,12 @@ func balanceText(confirmed, pending int64) string {
 	return formatAmount(confirmed + pending)
 }
 
-// pendingText is the note under the balance naming the part of it that is
-// still unconfirmed, or empty when nothing is pending.
+// pendingText is the note next to the balance naming the incoming part of it
+// that is still unconfirmed. It is empty when nothing is incoming: pending
+// spends lower the balance but get no note.
 func pendingText(pending int64) string {
-	switch {
-	case pending > 0:
-		return "(+" + formatAmount(pending) + " pending)"
-	case pending < 0:
-		return "(" + formatAmount(pending) + " pending)"
+	if pending <= 0 {
+		return ""
 	}
-	return ""
+	return "(" + formatAmount(pending) + " pending)"
 }

@@ -30,7 +30,7 @@ type Options struct {
 func Run(opts Options) {
 	var a = app.NewWithID("bitfyn.wallet")
 	var w = a.NewWindow("BitFyn")
-	w.Resize(fyne.NewSize(800, 900))
+	w.Resize(fyne.NewSize(700, 800))
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
 	var gui, err = newGUI(opts, w)
@@ -63,6 +63,7 @@ type gui struct {
 	addr *widget.Label
 	balance *widget.Label
 	pending *widget.RichText
+	balanceRow *fyne.Container
 	signal *SignalWidget
 	status *widget.Label
 }
@@ -113,10 +114,12 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	}, nil
 }
 
-// content builds the window layout: the address QR code in the centre and
+// content builds the window layout: the title on the top row with the
+// connectivity bars at its right, the status line below the bars, sharing
+// its row with the network name off mainnet, then the address QR code and
 // the address text right below it with a clipboard copy icon directly after
 // the text, then the wallet balance in large type with a small grey note on
-// the pending part below it, both filled in by the sync status.
+// the incoming pending part at its right, both filled in by the sync status.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -127,9 +130,9 @@ func (g *gui) content() fyne.CanvasObject {
 	})
 	copyBtn.Importance = widget.LowImportance
 	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	var top = container.NewVBox(title)
+	var network = fyne.CanvasObject(layout.NewSpacer())
 	if g.wallet.Net().Net != chaincfg.MainNetParams.Net {
-		top.Add(widget.NewLabelWithStyle("net: "+g.net, fyne.TextAlignCenter, fyne.TextStyle{}))
+		network = widget.NewLabelWithStyle("net: "+g.net, fyne.TextAlignCenter, fyne.TextStyle{})
 	}
 	if err := g.refreshAddress(); err != nil {
 		dialog.ShowError(err, g.window)
@@ -138,19 +141,23 @@ func (g *gui) content() fyne.CanvasObject {
 	g.balance.SizeName = theme.SizeNameHeadingText
 	g.pending = widget.NewRichText(&widget.TextSegment{Style: pendingStyle})
 	g.pending.Hide()
+	g.balanceRow = container.New(balanceLayout{}, g.balance, g.pending)
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
-	var corner = container.NewVBox(
-		container.NewHBox(layout.NewSpacer(), g.signal),
+	var titleRow = container.NewStack(
+		container.NewCenter(title),
+		container.NewHBox(layout.NewSpacer(), container.NewCenter(g.signal)),
+	)
+	var statusRow = container.NewStack(
+		container.NewCenter(network),
 		container.NewHBox(layout.NewSpacer(), g.status),
 	)
 	return container.NewVBox(
-		corner,
-		top,
+		titleRow,
+		statusRow,
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
-		container.NewCenter(g.balance),
-		container.NewCenter(g.pending),
+		g.balanceRow,
 	)
 }
 
@@ -216,8 +223,9 @@ var pendingStyle = widget.RichTextStyle{
 	SizeName:  theme.SizeNameCaptionText,
 }
 
-// showBalance shows the spendable balance and, only while something is
-// unconfirmed, the pending note under it.
+// showBalance shows the spendable balance and, only while a payment is
+// incoming unconfirmed, the pending note next to it. The row is laid out
+// again, as both texts change width.
 func (g *gui) showBalance(confirmed, pending int64) {
 	g.balance.SetText(balanceText(confirmed, pending))
 	var note = pendingText(pending)
@@ -228,4 +236,5 @@ func (g *gui) showBalance(confirmed, pending int64) {
 	} else {
 		g.pending.Show()
 	}
+	g.balanceRow.Refresh()
 }
