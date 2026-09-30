@@ -3,11 +3,13 @@ package gui
 
 import "errors"
 import "fmt"
+import "image/color"
 import "log"
 import "path/filepath"
 import "time"
 import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/app"
+import "fyne.io/fyne/v2/canvas"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/dialog"
 import "fyne.io/fyne/v2/layout"
@@ -66,6 +68,8 @@ type gui struct {
 	balanceRow *fyne.Container
 	signal *SignalWidget
 	status *widget.Label
+	receive *widget.Button
+	send    *widget.Button
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -119,7 +123,8 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 // its row with the network name off mainnet, then the address QR code and
 // the address text right below it with a clipboard copy icon directly after
 // the text, then the wallet balance in large type with a small grey note on
-// the incoming pending part at its right, both filled in by the sync status.
+// the incoming pending part at its right, both filled in by the sync status,
+// and the Receive and Send buttons.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -158,7 +163,28 @@ func (g *gui) content() fyne.CanvasObject {
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 		g.balanceRow,
+		g.actions(),
 	)
+}
+
+// actionWidth is the width of each of the Receive and Send buttons.
+const actionWidth = 160
+
+// actions builds the Receive and Send buttons under the balance, Receive at
+// the left with an arrow down onto a line, Send at the right with an arrow
+// up from a line, both the same width. Receive opens the invoice dialog,
+// Send the payment dialog.
+func (g *gui) actions() fyne.CanvasObject {
+	g.receive = widget.NewButtonWithIcon("Receive", theme.DownloadIcon(), g.showReceive)
+	g.send = widget.NewButtonWithIcon("Send", theme.UploadIcon(), g.showSend)
+	return container.NewCenter(container.NewGridWithColumns(2, atLeastWide(g.receive, actionWidth), atLeastWide(g.send, actionWidth)))
+}
+
+// atLeastWide gives the object a minimum width, keeping its own height.
+func atLeastWide(o fyne.CanvasObject, width float32) fyne.CanvasObject {
+	var strut = canvas.NewRectangle(color.Transparent)
+	strut.SetMinSize(fyne.NewSize(width, 0))
+	return container.NewStack(strut, o)
 }
 
 // refreshAddress derives the current address, updates QR, labels and the
@@ -175,7 +201,7 @@ func (g *gui) refreshAddress() error {
 	if err := g.store.AddAddress(g.index, path, address, pubkey); err != nil {
 		return fmt.Errorf("store address: %w", err)
 	}
-	sync.Watch(address, pubkey)
+	sync.Watch(address, path, pubkey)
 	return nil
 }
 

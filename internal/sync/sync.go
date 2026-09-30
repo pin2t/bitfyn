@@ -33,9 +33,11 @@ const anchorRequestTimeout = 20 * time.Second
 // requestTimeout bounds how long a single request may wait for a response.
 const requestTimeout = 90 * time.Second
 
-// watchScript is one wallet output script kept for filter matching.
+// watchScript is one wallet output script kept for filter matching, with
+// its address and the derivation path of its key.
 type watchScript struct {
 	address string
+	path    string
 	script  []byte
 }
 
@@ -93,12 +95,16 @@ func Init(network *chaincfg.Params, db *storage.Store) error {
 	if err != nil {
 		return fmt.Errorf("load addresses: %w", err)
 	}
-	scripts = make([]watchScript, 0, len(addresses))
-	scriptIndex = make(map[string]int, len(addresses))
-	for _, a := range addresses {
+	change, err := store.ChangeAddresses()
+	if err != nil {
+		return fmt.Errorf("load change addresses: %w", err)
+	}
+	scripts = make([]watchScript, 0, len(addresses)+len(change))
+	scriptIndex = make(map[string]int, len(addresses)+len(change))
+	for _, a := range append(addresses, change...) {
 		var script = p2wpkhScript(a.Pubkey)
 		scriptIndex[string(script)] = len(scripts)
-		scripts = append(scripts, watchScript{address: a.Address, script: script})
+		scripts = append(scripts, watchScript{address: a.Address, path: a.Path, script: script})
 	}
 	if err := loadWallet(); err != nil {
 		return err

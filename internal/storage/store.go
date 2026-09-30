@@ -35,6 +35,13 @@ create table if not exists addresses (
 	used           integer not null default 0,
 	createdAt      integer not null
 );
+create table if not exists change_addresses (
+	idx            integer primary key,
+	derivationPath text    not null unique,
+	address        text    not null unique,
+	pubkey         blob    not null,
+	createdAt      integer not null
+);
 create table if not exists headers (
 	height     integer primary key,
 	hash       blob not null unique,

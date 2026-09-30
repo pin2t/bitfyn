@@ -2,6 +2,7 @@ package storage
 
 import "database/sql"
 import "errors"
+import "time"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 
 // Header is one validated block header kept by the SPV sync.
@@ -48,9 +49,11 @@ type PendingTx struct {
 	SeenAt int64
 }
 
-// StoredAddress is one derived address row with its public key.
+// StoredAddress is one derived address row with its derivation path and
+// public key.
 type StoredAddress struct {
 	Index   uint32
+	Path    string
 	Address string
 	Pubkey  []byte
 }
@@ -360,9 +363,18 @@ func (s *Store) DeletePendingBefore(unix int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// Addresses returns all derived addresses with their public keys.
+// Addresses returns all derived receive addresses.
 func (s *Store) Addresses() ([]StoredAddress, error) {
-	var rows, err = s.db.Query(`select idx, address, pubkey from addresses order by idx`)
+	return s.addresses(`select idx, derivationPath, address, pubkey from addresses order by idx`)
+}
+
+// ChangeAddresses returns all derived change addresses.
+func (s *Store) ChangeAddresses() ([]StoredAddress, error) {
+	return s.addresses(`select idx, derivationPath, address, pubkey from change_addresses order by idx`)
+}
+
+func (s *Store) addresses(query string) ([]StoredAddress, error) {
+	var rows, err = s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -370,12 +382,21 @@ func (s *Store) Addresses() ([]StoredAddress, error) {
 	var out []StoredAddress
 	for rows.Next() {
 		var a StoredAddress
-		if err := rows.Scan(&a.Index, &a.Address, &a.Pubkey); err != nil {
+		if err := rows.Scan(&a.Index, &a.Path, &a.Address, &a.Pubkey); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// AddChangeAddress records a derived change address. Idempotent.
+func (s *Store) AddChangeAddress(index uint32, path, address string, pubkey []byte) error {
+	var _, err = s.db.Exec(
+		`insert or ignore into change_addresses (idx, derivationPath, address, pubkey, createdAt) values (?, ?, ?, ?, ?)`,
+		index, path, address, pubkey, time.Now().Unix(),
+	)
+	return err
 }
 
 // SavePeer records a known peer address. Idempotent.

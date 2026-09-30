@@ -1,5 +1,6 @@
 package gui
 
+import "errors"
 import "fmt"
 import "strconv"
 import "strings"
@@ -60,4 +61,73 @@ func pendingText(pending int64) string {
 		return ""
 	}
 	return "(" + formatAmount(pending) + " pending)"
+}
+
+// Amount units offered where an amount is entered.
+const unitSats = "sats"
+const unitBTC = "BTC"
+
+// maxSats is the 21 million BTC supply cap in satoshis.
+const maxSats = 21_000_000 * satsPerBTC
+
+// parseAmount reads an entered amount in the unit: whole sats, or BTC with
+// at most eight decimals. Spaces grouping digits are ignored and an empty
+// entry is zero.
+func parseAmount(text, unit string) (int64, error) {
+	var clean = strings.ReplaceAll(strings.TrimSpace(text), " ", "")
+	if clean == "" {
+		return 0, nil
+	}
+	var sats int64
+	if unit == unitSats {
+		var n, err = strconv.ParseInt(clean, 10, 64)
+		if err != nil || n < 0 {
+			return 0, errors.New("enter a whole number of sats")
+		}
+		sats = n
+	} else {
+		var whole, frac, _ = strings.Cut(clean, ".")
+		if len(frac) > 8 {
+			return 0, errors.New("BTC amounts have at most 8 decimals")
+		}
+		var w, err = strconv.ParseInt(whole+"0", 10, 64)
+		var f, ferr = strconv.ParseInt(frac+strings.Repeat("0", 8-len(frac)), 10, 64)
+		if err != nil || ferr != nil || w < 0 || strings.ContainsAny(clean, "+-") {
+			return 0, errors.New("enter an amount like 0.0015")
+		}
+		sats = w/10*satsPerBTC + f
+	}
+	if sats > maxSats {
+		return 0, errors.New("amount exceeds 21 million BTC")
+	}
+	return sats, nil
+}
+
+// unitText renders sats in the unit, without grouping, for an entry field.
+func unitText(sats int64, unit string) string {
+	if unit == unitSats {
+		return strconv.FormatInt(sats, 10)
+	}
+	return btcDecimal(sats)
+}
+
+// btcDecimal renders sats as a plain BTC decimal with trailing zeros dropped,
+// as BIP21 amounts are written.
+func btcDecimal(sats int64) string {
+	var frac = strings.TrimRight(fmt.Sprintf("%08d", sats%satsPerBTC), "0")
+	var whole = strconv.FormatInt(sats/satsPerBTC, 10)
+	if frac == "" {
+		return whole
+	}
+	return whole + "." + frac
+}
+
+// invoiceURI is the BIP21 payment request for the address, with the amount
+// when one is given.
+func invoiceURI(address string, sats int64) string {
+	var uri = "bitcoin:" + address
+	if sats > 0 {
+		uri += "?amount=" + btcDecimal(sats)
+	}
+	return uri
 }
