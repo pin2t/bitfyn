@@ -53,6 +53,7 @@ func loadWalletLocked() error {
 		return fmt.Errorf("load pending transactions: %w", err)
 	}
 	var confirmed = make([]*wire.MsgTx, 0, len(stored))
+	var times = make([]int64, 0, len(stored)+len(pending))
 	confirmedIDs = make(map[chainhash.Hash]bool, len(stored))
 	for _, t := range stored {
 		var tx, err = decodeTx(t.Raw)
@@ -60,6 +61,7 @@ func loadWalletLocked() error {
 			return fmt.Errorf("decode stored tx %s: %w", t.Txid, err)
 		}
 		confirmed = append(confirmed, tx)
+		times = append(times, blockTime(t.Height))
 		confirmedIDs[t.Txid] = true
 	}
 	var unconfirmed = make([]*wire.MsgTx, 0, len(pending))
@@ -71,6 +73,7 @@ func loadWalletLocked() error {
 			return fmt.Errorf("decode pending tx %s: %w", p.Txid, err)
 		}
 		unconfirmed = append(unconfirmed, tx)
+		times = append(times, p.SeenAt)
 		pendingIDs[p.Txid] = true
 		for _, in := range tx.TxIn {
 			pendingSpends[in.PreviousOutPoint] = p.Txid
@@ -88,7 +91,7 @@ func loadWalletLocked() error {
 			var op = wire.OutPoint{Hash: txid, Index: uint32(i)}
 			outpoints[op] = w.address
 			usedAddrs[w.address] = true
-			unspent[op] = wallet.Coin{OutPoint: op, Value: out.Value, PkScript: out.PkScript, Address: w.address, Path: w.path, Confirmed: n < len(confirmed)}
+			unspent[op] = wallet.Coin{OutPoint: op, Value: out.Value, PkScript: out.PkScript, Address: w.address, Path: w.path, Confirmed: n < len(confirmed), Time: times[n]}
 		}
 	}
 	for _, tx := range append(confirmed, unconfirmed...) {
@@ -107,6 +110,15 @@ func loadWalletLocked() error {
 	pendingTxs = unconfirmed
 	confirmedBalance, pendingBalance = computeBalance(confirmed, unconfirmed, isWalletScript)
 	return nil
+}
+
+// blockTime is the unix time of the block at the height, or 0 when its
+// header is not loaded.
+func blockTime(height int32) int64 {
+	if chain == nil { return 0 }
+	var h, ok = chain.HeaderAt(height)
+	if !ok { return 0 }
+	return h.Timestamp.Unix()
 }
 
 func decodeTx(raw []byte) (*wire.MsgTx, error) {

@@ -1,9 +1,11 @@
 package gui
 
+import "time"
 import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
+import "bitfyn/internal/sync"
 
 // coinsIcon is two overlapping coins, the Material Design "toll" icon like
 // the theme's own icons, recoloured with the theme.
@@ -16,9 +18,11 @@ var coinsIcon = theme.NewThemedResource(fyne.NewStaticResource("coins.svg", []by
 // of the window, above the Coins, Transactions and Settings tabs, each shown
 // as its icon over its name. Home is selected.
 func (g *gui) tabs(home fyne.CanvasObject) *container.AppTabs {
+	g.coinsView = newCoinsView(g)
+	g.coinsView.update(sync.Coins(), time.Now())
 	var tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Home", theme.HomeIcon(), home),
-		container.NewTabItemWithIcon("Coins", coinsIcon, placeholder("Coins")),
+		container.NewTabItemWithIcon("Coins", coinsIcon, g.coinsView.content),
 		container.NewTabItemWithIcon("Transactions", theme.HistoryIcon(), placeholder("Transactions")),
 		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), placeholder("Settings")),
 	)

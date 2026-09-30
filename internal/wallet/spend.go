@@ -16,7 +16,8 @@ import "github.com/btcsuite/btcd/wire"
 var ErrInsufficientFunds = errors.New("insufficient funds")
 
 // Coin is one spendable wallet output with the derivation path of the key
-// that controls it.
+// that controls it, and the unix time it appeared: the time of its block, or
+// when its unconfirmed transaction was first seen. Time is 0 when unknown.
 type Coin struct {
 	OutPoint  wire.OutPoint
 	Value     int64
@@ -24,6 +25,7 @@ type Coin struct {
 	Address   string
 	Path      string
 	Confirmed bool
+	Time      int64
 }
 
 // Spend is a planned transaction: the coins it spends, the amount paid, the
