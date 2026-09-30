@@ -63,6 +63,31 @@ func pendingText(pending int64) string {
 	return "(" + formatAmount(pending) + " pending)"
 }
 
+// usdValue is the worth of an amount of satoshis in US cents at a rate in
+// cents per bitcoin, rounded to the cent. The whole bitcoins and the rest are
+// valued apart so the product cannot overflow.
+func usdValue(sats, centsPerBTC int64) int64 {
+	var sign = int64(1)
+	if sats < 0 {
+		sign, sats = -1, -sats
+	}
+	var whole = sats / satsPerBTC * centsPerBTC
+	var frac = (sats%satsPerBTC*centsPerBTC + satsPerBTC/2) / satsPerBTC
+	return sign * (whole + frac)
+}
+
+// formatUSD renders US cents as dollars with the whole part grouped by three
+// digits and always two decimals, as in "12 345.67 USD".
+func formatUSD(cents int64) string {
+	var sign = ""
+	var abs = uint64(cents)
+	if cents < 0 {
+		sign = "-"
+		abs = uint64(-cents)
+	}
+	return fmt.Sprintf("%s%s.%02d USD", sign, groupDigits(strconv.FormatUint(abs/100, 10)), abs%100)
+}
+
 // Amount units offered where an amount is entered.
 const unitSats = "sats"
 const unitBTC = "BTC"
