@@ -85,7 +85,8 @@ func TestInvoiceURI(t *testing.T) {
 	}
 }
 
-// TestUSD checks the dollar worth of balances, rounded to the cent without
+// TestUSD checks the dollar worth of balances, rounded to the cent, half up
+// (1 250 000 sats are worth 104 707.3375 cents, 6 sats 0.5026 cents), without
 // overflow at the supply cap, and its grouped two-decimal rendering.
 func TestUSD(t *testing.T) {
 	var values = []struct {
@@ -93,10 +94,10 @@ func TestUSD(t *testing.T) {
 	}{
 		{0, 8_376_587, 0},
 		{100_000_000, 8_376_587, 8_376_587},
-		{1_250_000, 8_376_587, 104_707},       // 104 707.3375 cents
-		{1, 8_376_587, 0},                     // 0.0838 cents
-		{6, 8_376_587, 1},                     // 0.5026 cents rounds up
-		{150_000_000, 8_376_587, 12_564_881},  // 12 564 880.5 rounds up
+		{1_250_000, 8_376_587, 104_707},
+		{1, 8_376_587, 0},
+		{6, 8_376_587, 1},
+		{150_000_000, 8_376_587, 12_564_881},
 		{maxSats, 100_000_000_000, 2_100_000_000_000_000_000},
 		{-1_250_000, 8_376_587, -104_707},
 	}

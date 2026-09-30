@@ -32,6 +32,9 @@ func TestParseCSVErrors(t *testing.T) {
 	}
 }
 
+// TestCombine checks that close rates are averaged, rounding half up, even
+// at a spread of exactly 10%, and that the highest rate is taken once the
+// lowest is more than 10% below it.
 func TestCombine(t *testing.T) {
 	var cases = []struct {
 		in   []int64
@@ -39,11 +42,11 @@ func TestCombine(t *testing.T) {
 	}{
 		{[]int64{100, 101, 103}, 101},
 		{[]int64{100, 101, 102}, 101},
-		{[]int64{90, 95, 100}, 95},    // 10% spread exactly: averaged
-		{[]int64{89, 95, 100}, 100},   // more than 10%: highest
+		{[]int64{90, 95, 100}, 95},
+		{[]int64{89, 95, 100}, 100},
 		{[]int64{100, 100, 50}, 100},
 		{[]int64{6500012}, 6500012},
-		{[]int64{3, 4}, 4},            // rounds half up
+		{[]int64{3, 4}, 4},
 	}
 	for _, c := range cases {
 		if got := combine(c.in); got != c.want {
