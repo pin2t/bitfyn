@@ -16,6 +16,14 @@ import "github.com/btcsuite/btcd/wire"
 // HandshakeTimeout bounds the TCP dial and the version/verack exchange.
 const HandshakeTimeout = 15 * time.Second
 
+// KeepAlive is how long a peer connection may stay silent, its keepalive
+// probes unanswered, before the OS drops it: the first probe goes out after
+// half of it, then keepAliveProbes probes, the last timing out at the end.
+// A peer lost to a network change or a dead link is noticed within it rather
+// than after the OS default of minutes, so a new peer is chosen sooner.
+const KeepAlive = 30 * time.Second
+const keepAliveProbes = 3
+
 // PeerAddr is one candidate peer: an IP address and its TCP port.
 type PeerAddr struct {
 	Host string
@@ -40,10 +48,11 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 // DialContext is Dial that gives up as soon as the context is cancelled,
 // during the TCP dial as well as during the handshake. relay sets whether the
 // peer should announce the transactions it relays, the version message relay
-// flag; without it only a BIP37 filterload turns relay on.
+// flag; without it only a BIP37 filterload turns relay on. The connection
+// probes the peer with TCP keepalives as KeepAlive sets.
 func DialContext(ctx context.Context, params *chaincfg.Params, address string, listeners peer.MessageListeners, relay bool) (*peer.Peer, time.Duration, error) {
 	var started = time.Now()
-	var dialer = net.Dialer{Timeout: HandshakeTimeout}
+	var dialer = net.Dialer{Timeout: HandshakeTimeout, KeepAliveConfig: keepAliveConfig()}
 	var conn, err = dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, 0, fmt.Errorf("dial peer %s: %w", address, err)
@@ -83,6 +92,18 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 	p.Disconnect()
 	p.WaitForDisconnect()
 	return nil, 0, fmt.Errorf("handshake with %s timed out", address)
+}
+
+// keepAliveConfig probes an idle connection after half of KeepAlive and then
+// keepAliveProbes times over the other half, so an unanswered connection is
+// dropped KeepAlive after it went silent.
+func keepAliveConfig() net.KeepAliveConfig {
+	return net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     KeepAlive / 2,
+		Interval: KeepAlive / 2 / keepAliveProbes,
+		Count:    keepAliveProbes,
+	}
 }
 
 // Seeds resolves every IP address advertised by the network's DNS seeds.

@@ -1,5 +1,6 @@
 package sync
 
+import "context"
 import "fmt"
 import "log"
 import "time"
@@ -48,10 +49,10 @@ func newConn(addr string) (*conn, error) {
 }
 
 // dial connects and completes the handshake, asking the peer to announce the
-// transactions it relays when relay is set. quit is closed once the peer
-// disconnects, for whatever reason.
-func (c *conn) dial(relay bool) (time.Duration, error) {
-	var p, handshake, err = p2p.DialContext(dialCtx, params, c.addr, c.listeners(), relay)
+// transactions it relays when relay is set, and gives up once ctx is
+// cancelled. quit is closed once the peer disconnects, for whatever reason.
+func (c *conn) dial(ctx context.Context, relay bool) (time.Duration, error) {
+	var p, handshake, err = p2p.DialContext(ctx, params, c.addr, c.listeners(), relay)
 	if err != nil { return 0, err }
 	c.peer = p
 	go func() {
