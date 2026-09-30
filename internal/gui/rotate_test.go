@@ -134,3 +134,64 @@ func TestActions(t *testing.T) {
 		t.Fatalf("buttons at y %v not below the balance at y %v", receiveAt.Y, balanceAt.Y)
 	}
 }
+
+// TestSignalAlignment checks that the highest connectivity bar ends where the
+// status text under it ends, and that the text starts one padding under the
+// bars, on the line of the network name.
+func TestSignalAlignment(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	var content = g.content()
+	g.status.SetText(sync.Status{Peers: 3}.String())
+	w.SetContent(content)
+	w.Resize(fyne.NewSize(700, 800))
+	var driver = app.Driver()
+	var barsEnd = driver.AbsolutePositionForObject(g.signal).X + g.signal.Size().Width
+	var textEnd = driver.AbsolutePositionForObject(g.status).X + g.status.Size().Width - theme.InnerPadding()
+	if barsEnd != textEnd {
+		t.Fatalf("highest bar ends at %v, status text at %v", barsEnd, textEnd)
+	}
+	var barsBottom = driver.AbsolutePositionForObject(g.signal).Y + g.signal.Size().Height
+	var status = driver.AbsolutePositionForObject(g.status)
+	if textTop := status.Y + theme.InnerPadding(); textTop != barsBottom+theme.Padding() {
+		t.Fatalf("status text starts at %v, bars end at %v, want one padding apart", textTop, barsBottom)
+	}
+	var network = driver.AbsolutePositionForObject(content.(*fyne.Container).Objects[0].(*fyne.Container).Objects[2])
+	if network.Y != status.Y {
+		t.Fatalf("network name at y %v, status at y %v", network.Y, status.Y)
+	}
+}
+
+// TestAddressRow checks that the address is centred under the QR code and
+// the copy icon starts one padding after the address text.
+func TestAddressRow(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	w.SetContent(g.content())
+	w.Resize(fyne.NewSize(700, 800))
+	var driver = app.Driver()
+	var qr = driver.AbsolutePositionForObject(g.qr).X + g.qr.Size().Width/2
+	var addr = driver.AbsolutePositionForObject(g.addr).X + g.addr.Size().Width/2
+	if addr != qr {
+		t.Fatalf("address centred at %v, QR code at %v", addr, qr)
+	}
+	var textEnd = driver.AbsolutePositionForObject(g.addr).X + g.addr.Size().Width - theme.InnerPadding()
+	var iconStart = driver.AbsolutePositionForObject(g.copyAddr).X + (g.copyAddr.Size().Width-theme.IconInlineSize())/2
+	if iconStart-textEnd != theme.Padding() {
+		t.Fatalf("copy icon starts %v after the address text, want %v", iconStart-textEnd, theme.Padding())
+	}
+}

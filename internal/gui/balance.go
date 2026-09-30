@@ -7,7 +7,8 @@ import "fyne.io/fyne/v2/widget"
 
 // balanceLayout lays out the balance rows: the balance centred on the first
 // row with the pending note right after it, the text of both on one
-// baseline, and the USD value on the second row. The note's width is reserved
+// baseline, and the USD value on the second row, raised by usdLift. The
+// note's width is reserved
 // on both sides, so the balance stays centred under the address whether the
 // note is shown or not. The USD value ends its number where the balance ends
 // its number, the units of both hanging past that edge.
@@ -37,7 +38,7 @@ func (balanceLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 // at its right, raised or lowered so both texts share the baseline: bottom
 // aligned boxes would sit the smaller text visibly lower. Both widgets pad
 // their text alike, so only the baselines of the two text sizes differ. The
-// USD value goes under them, placed by usdRight.
+// USD value goes under them, placed by usdRight and raised by usdLift.
 func (balanceLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	var main = objects[0].MinSize()
 	var note = objects[1].MinSize()
@@ -51,7 +52,14 @@ func (balanceLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	objects[1].Resize(note)
 	objects[1].Move(fyne.NewPos(x+main.Width, y+textBaseline(balanceSize, balanceStyle)-textBaseline(noteSize, noteStyle)))
 	objects[2].Resize(usd)
-	objects[2].Move(fyne.NewPos(usdRight(objects, center)-usd.Width, row))
+	objects[2].Move(fyne.NewPos(usdRight(objects, center)-usd.Width, row-usdLift()))
+}
+
+// usdLift raises the USD value into the padding under the balance, the text
+// padding of both, so it reads as part of the balance. The rows keep their
+// height: the space it leaves goes under it, apart from the widgets below.
+func usdLift() float32 {
+	return 2 * theme.InnerPadding()
 }
 
 // usdRight is the right edge of the USD widget when the balance is centred on
