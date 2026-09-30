@@ -85,6 +85,10 @@ create table if not exists peers (
 	failCount integer not null default 0,
 	primary key (host, port)
 );
+create table if not exists rates (
+	ts    integer primary key,
+	cents integer not null
+);
 `
 
 // Meta is the single wallet metadata row.

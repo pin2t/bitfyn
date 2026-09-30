@@ -16,6 +16,7 @@ import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
+import "bitfyn/internal/rates"
 import "bitfyn/internal/storage"
 import "bitfyn/internal/sync"
 import "bitfyn/internal/wallet"
@@ -47,10 +48,16 @@ func Run(opts Options) {
 	}
 	w.SetOnClosed(func() {
 		sync.Stop()
+		rates.Stop()
 		_ = gui.store.Close()
 	})
 	w.SetContent(gui.content())
-	a.Lifecycle().SetOnStarted(func() { gui.startSync(opts.Peer) })
+	a.Lifecycle().SetOnStarted(func() {
+		gui.startSync(opts.Peer)
+		rates.Start(gui.store, func(r storage.Rate) {
+			fyne.Do(func() { gui.setRate(r.Cents) })
+		})
+	})
 	w.ShowAndRun()
 }
 
@@ -65,7 +72,10 @@ type gui struct {
 	addr *widget.Label
 	balance *widget.Label
 	pending *widget.RichText
+	usd     *widget.RichText
 	balanceRow *fyne.Container
+	total int64
+	rate  int64
 	signal *SignalWidget
 	status *widget.Label
 	receive *widget.Button
@@ -82,6 +92,13 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	var fail = func(err error) (*gui, error) {
 		_ = store.Close()
 		return nil, err
+	}
+	if err := rates.Seed(store); err != nil {
+		log.Printf("rates: %v", err)
+	}
+	var rate, rerr = store.LatestRate()
+	if rerr != nil && !errors.Is(rerr, storage.ErrNoRate) {
+		log.Printf("rates: read latest rate: %v", rerr)
 	}
 	meta, err := store.Meta()
 	var wl *wallet.Wallet
@@ -115,6 +132,7 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 		wallet: wl,
 		net:    meta.Network,
 		index:  meta.NextIndex,
+		rate:   rate.Cents,
 	}, nil
 }
 
@@ -123,8 +141,9 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 // its row with the network name off mainnet, then the address QR code and
 // the address text right below it with a clipboard copy icon directly after
 // the text, then the wallet balance in large type with a small grey note on
-// the incoming pending part at its right, both filled in by the sync status,
-// and the Receive and Send buttons.
+// the incoming pending part at its right and the balance in US dollars under
+// it in smaller grey type, all filled in by the sync status, and the Receive
+// and Send buttons.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -146,7 +165,9 @@ func (g *gui) content() fyne.CanvasObject {
 	g.balance.SizeName = theme.SizeNameHeadingText
 	g.pending = widget.NewRichText(&widget.TextSegment{Style: pendingStyle})
 	g.pending.Hide()
-	g.balanceRow = container.New(balanceLayout{}, g.balance, g.pending)
+	g.usd = widget.NewRichText(&widget.TextSegment{Style: usdTextStyle})
+	g.usd.Hide()
+	g.balanceRow = container.New(balanceLayout{}, g.balance, g.pending, g.usd)
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
 	var titleRow = container.NewStack(
@@ -249,11 +270,20 @@ var pendingStyle = widget.RichTextStyle{
 	SizeName:  theme.SizeNameCaptionText,
 }
 
-// showBalance shows the spendable balance and, only while a payment is
-// incoming unconfirmed, the pending note next to it. The row is laid out
-// again, as both texts change width.
+// usdTextStyle sets the USD balance a step smaller than the balance, in the
+// same grey as the pending note.
+var usdTextStyle = widget.RichTextStyle{
+	ColorName: theme.ColorNamePlaceHolder,
+	SizeName:  theme.SizeNameSubHeadingText,
+}
+
+// showBalance shows the spendable balance, its worth in US dollars at the
+// latest rate and, only while a payment is incoming unconfirmed, the pending
+// note next to it. The rows are laid out again, as the texts change width.
 func (g *gui) showBalance(confirmed, pending int64) {
+	g.total = confirmed + pending
 	g.balance.SetText(balanceText(confirmed, pending))
+	g.showUSD()
 	var note = pendingText(pending)
 	g.pending.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: note, Style: pendingStyle}}
 	g.pending.Refresh()
@@ -263,4 +293,25 @@ func (g *gui) showBalance(confirmed, pending int64) {
 		g.pending.Show()
 	}
 	g.balanceRow.Refresh()
+}
+
+// setRate takes a new rate in cents per bitcoin and revalues the balance
+// once one is shown.
+func (g *gui) setRate(cents int64) {
+	g.rate = cents
+	if g.balance.Text == "" { return }
+	g.showUSD()
+	g.balanceRow.Refresh()
+}
+
+// showUSD shows the balance in US dollars, or hides the line while no rate
+// is known.
+func (g *gui) showUSD() {
+	if g.rate <= 0 {
+		g.usd.Hide()
+		return
+	}
+	g.usd.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: formatUSD(usdValue(g.total, g.rate)), Style: usdTextStyle}}
+	g.usd.Refresh()
+	g.usd.Show()
 }

@@ -92,6 +92,17 @@ func TestShowBalance(t *testing.T) {
 	if g.balance.Text != "1 200 000 sats" || g.pending.Visible() {
 		t.Fatalf("pending spend: %q, note visible %v", g.balance.Text, g.pending.Visible())
 	}
+	var usd = g.usd.Segments[0].(*widget.TextSegment)
+	if !g.usd.Visible() || usd.Text != "1 006.49 USD" {
+		t.Fatalf("USD balance %q, visible %v; want 1 006.49 USD at the seeded rate", usd.Text, g.usd.Visible())
+	}
+	if usd.Style.SizeName != theme.SizeNameSubHeadingText || usd.Style.ColorName != theme.ColorNamePlaceHolder {
+		t.Fatal("USD balance must be subheading size in the placeholder grey")
+	}
+	g.setRate(10_000_000)
+	if usd = g.usd.Segments[0].(*widget.TextSegment); usd.Text != "1 200.00 USD" {
+		t.Fatalf("USD balance after a new rate = %q, want 1 200.00 USD", usd.Text)
+	}
 }
 
 // TestActions checks the Receive and Send buttons: labels, icons, and

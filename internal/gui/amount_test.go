@@ -84,3 +84,40 @@ func TestInvoiceURI(t *testing.T) {
 		t.Errorf("unitText = %q", got)
 	}
 }
+
+// TestUSD checks the dollar worth of balances, rounded to the cent without
+// overflow at the supply cap, and its grouped two-decimal rendering.
+func TestUSD(t *testing.T) {
+	var values = []struct {
+		sats, rate, want int64
+	}{
+		{0, 8_376_587, 0},
+		{100_000_000, 8_376_587, 8_376_587},
+		{1_250_000, 8_376_587, 104_707},       // 104 707.3375 cents
+		{1, 8_376_587, 0},                     // 0.0838 cents
+		{6, 8_376_587, 1},                     // 0.5026 cents rounds up
+		{150_000_000, 8_376_587, 12_564_881},  // 12 564 880.5 rounds up
+		{maxSats, 100_000_000_000, 2_100_000_000_000_000_000},
+		{-1_250_000, 8_376_587, -104_707},
+	}
+	for _, c := range values {
+		if got := usdValue(c.sats, c.rate); got != c.want {
+			t.Errorf("usdValue(%d, %d) = %d, want %d", c.sats, c.rate, got, c.want)
+		}
+	}
+	var texts = []struct {
+		cents int64
+		want  string
+	}{
+		{0, "0.00 USD"},
+		{5, "0.05 USD"},
+		{1_234_567, "12 345.67 USD"},
+		{100_000_000, "1 000 000.00 USD"},
+		{-1_234_567, "-12 345.67 USD"},
+	}
+	for _, c := range texts {
+		if got := formatUSD(c.cents); got != c.want {
+			t.Errorf("formatUSD(%d) = %q, want %q", c.cents, got, c.want)
+		}
+	}
+}
