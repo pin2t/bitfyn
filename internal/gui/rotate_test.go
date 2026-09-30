@@ -168,3 +168,30 @@ func TestSignalAlignment(t *testing.T) {
 		t.Fatalf("network name at y %v, status at y %v", network.Y, status.Y)
 	}
 }
+
+// TestAddressRow checks that the address is centred under the QR code and
+// the copy icon starts one padding after the address text.
+func TestAddressRow(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	w.SetContent(g.content())
+	w.Resize(fyne.NewSize(700, 800))
+	var driver = app.Driver()
+	var qr = driver.AbsolutePositionForObject(g.qr).X + g.qr.Size().Width/2
+	var addr = driver.AbsolutePositionForObject(g.addr).X + g.addr.Size().Width/2
+	if addr != qr {
+		t.Fatalf("address centred at %v, QR code at %v", addr, qr)
+	}
+	var textEnd = driver.AbsolutePositionForObject(g.addr).X + g.addr.Size().Width - theme.InnerPadding()
+	var iconStart = driver.AbsolutePositionForObject(g.copyAddr).X + (g.copyAddr.Size().Width-theme.IconInlineSize())/2
+	if iconStart-textEnd != theme.Padding() {
+		t.Fatalf("copy icon starts %v after the address text, want %v", iconStart-textEnd, theme.Padding())
+	}
+}

@@ -70,6 +70,7 @@ type gui struct {
 	index uint32
 	qr   *QRWidget
 	addr *widget.Label
+	copyAddr *widget.Button
 	balance *widget.Label
 	pending *widget.RichText
 	usd     *widget.RichText
@@ -139,20 +140,21 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 // content builds the window layout: the title on the top row with the
 // connectivity bars at its right, the status line right under the bars, its
 // text ending where the highest bar ends, sharing its line with the network
-// name off mainnet, then the address QR code and the address text right below it
-// with a clipboard copy icon directly after the text, then the wallet balance
-// in large type with a small grey note on the incoming pending part at its
-// right and the balance in US dollars close under it in smaller grey type,
-// all filled in by the sync status, and the Receive and Send buttons.
+// name off mainnet, then the address QR code and the address text right
+// below it, centred under the code, with a clipboard copy icon close after
+// the text, then the wallet balance in large type with a small grey note on
+// the incoming pending part at its right and the balance in US dollars close
+// under it in smaller grey type, all filled in by the sync status, and the
+// Receive and Send buttons.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	var copyBtn = widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+	g.copyAddr = widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		if g.addr.Text == "" { return }
 		fyne.CurrentApp().Clipboard().SetContent(g.addr.Text)
 		dialog.ShowInformation("Copied", "Address copied to clipboard", g.window)
 	})
-	copyBtn.Importance = widget.LowImportance
+	g.copyAddr.Importance = widget.LowImportance
 	var title = widget.NewLabelWithStyle("BitFyn", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	var network = fyne.CanvasObject(layout.NewSpacer())
 	if g.wallet.Net().Net != chaincfg.MainNetParams.Net {
@@ -173,7 +175,7 @@ func (g *gui) content() fyne.CanvasObject {
 	return container.NewVBox(
 		container.New(headerLayout{}, title, signalInset(g.signal), network, g.status),
 		container.NewCenter(g.qr),
-		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
+		container.New(addressLayout{}, g.addr, g.copyAddr),
 		g.balanceRow,
 		g.actions(),
 	)
