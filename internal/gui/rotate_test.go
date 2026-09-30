@@ -134,3 +134,27 @@ func TestActions(t *testing.T) {
 		t.Fatalf("buttons at y %v not below the balance at y %v", receiveAt.Y, balanceAt.Y)
 	}
 }
+
+// TestSignalAlignment checks that the highest connectivity bar ends where the
+// status text under it ends.
+func TestSignalAlignment(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	var content = g.content()
+	g.status.SetText(sync.Status{Peers: 3}.String())
+	w.SetContent(content)
+	w.Resize(fyne.NewSize(700, 800))
+	var driver = app.Driver()
+	var barsEnd = driver.AbsolutePositionForObject(g.signal).X + g.signal.Size().Width
+	var textEnd = driver.AbsolutePositionForObject(g.status).X + g.status.Size().Width - theme.InnerPadding()
+	if barsEnd != textEnd {
+		t.Fatalf("highest bar ends at %v, status text at %v", barsEnd, textEnd)
+	}
+}

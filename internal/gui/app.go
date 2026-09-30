@@ -137,13 +137,13 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 }
 
 // content builds the window layout: the title on the top row with the
-// connectivity bars at its right, the status line below the bars, sharing
-// its row with the network name off mainnet, then the address QR code and
-// the address text right below it with a clipboard copy icon directly after
-// the text, then the wallet balance in large type with a small grey note on
-// the incoming pending part at its right and the balance in US dollars under
-// it in smaller grey type, all filled in by the sync status, and the Receive
-// and Send buttons.
+// connectivity bars at its right, the status line below the bars, its text
+// ending where the highest bar ends, sharing its row with the network name
+// off mainnet, then the address QR code and the address text right below it
+// with a clipboard copy icon directly after the text, then the wallet balance
+// in large type with a small grey note on the incoming pending part at its
+// right and the balance in US dollars close under it in smaller grey type,
+// all filled in by the sync status, and the Receive and Send buttons.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -172,7 +172,7 @@ func (g *gui) content() fyne.CanvasObject {
 	g.status = widget.NewLabel(sync.Status{}.String())
 	var titleRow = container.NewStack(
 		container.NewCenter(title),
-		container.NewHBox(layout.NewSpacer(), container.NewCenter(g.signal)),
+		container.NewHBox(layout.NewSpacer(), container.NewCenter(signalInset(g.signal))),
 	)
 	var statusRow = container.NewStack(
 		container.NewCenter(network),
@@ -186,6 +186,12 @@ func (g *gui) content() fyne.CanvasObject {
 		g.balanceRow,
 		g.actions(),
 	)
+}
+
+// signalInset pads the indicator on the right by the text padding of the
+// status label under it, so its highest bar ends where the status text ends.
+func signalInset(signal *SignalWidget) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(0, 0, 0, theme.InnerPadding()), signal)
 }
 
 // actionWidth is the width of each of the Receive and Send buttons.

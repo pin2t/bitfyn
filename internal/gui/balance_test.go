@@ -41,8 +41,9 @@ func TestBalanceLayout(t *testing.T) {
 	}
 }
 
-// TestBalanceLayoutUSD checks that the USD value sits under the balance with
-// the right ends of both numbers at the same x, the units hanging past it.
+// TestBalanceLayoutUSD checks that the USD value sits under the balance,
+// raised into its padding with the space left under it, with the right ends
+// of both numbers at the same x, the units hanging past it.
 func TestBalanceLayoutUSD(t *testing.T) {
 	var app = test.NewApp()
 	defer app.Quit()
@@ -62,8 +63,11 @@ func TestBalanceLayoutUSD(t *testing.T) {
 		}
 		var size = fyne.NewSize(600, min.Height)
 		balanceLayout{}.Layout(objects, size)
-		if main.Position().Y+main.Size().Height != first || usd.Position().Y != first {
-			t.Fatalf("%s: balance ends at %v, USD starts at %v, want both at %v", text, main.Position().Y+main.Size().Height, usd.Position().Y, first)
+		if main.Position().Y+main.Size().Height != first || usd.Position().Y != first-usdLift() {
+			t.Fatalf("%s: balance ends at %v, USD starts at %v, want %v and %v", text, main.Position().Y+main.Size().Height, usd.Position().Y, first, first-usdLift())
+		}
+		if gap := size.Height - (usd.Position().Y + usd.Size().Height); gap != usdLift() {
+			t.Fatalf("%s: %v left under the USD value, want %v", text, gap, usdLift())
 		}
 		var number = strings.LastIndexByte(text, ' ')
 		var mainEnd = main.Position().X + theme.InnerPadding() + textWidth(text[:number], balanceSize, balanceStyle)
