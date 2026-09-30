@@ -420,6 +420,7 @@ func connect(addr string, pinned bool) bool {
 	log.Printf("%s %s connected: %s, height %d, services %s, handshake %s (%d connected)",
 		kind, addr, p.UserAgent(), p.LastBlock(), p.Services(), handshake.Round(time.Millisecond), count)
 	c.loadBloom()
+	rebroadcast(c)
 	logRelayMode()
 	emit()
 	wakeSync()

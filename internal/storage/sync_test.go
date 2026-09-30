@@ -305,3 +305,29 @@ func TestPending(t *testing.T) {
 		t.Fatalf("PendingTransactions after deletes = %+v, %v", got, err)
 	}
 }
+
+// TestChangeAddresses checks that change addresses are stored apart from
+// receive addresses, with their paths, and that adding one twice is a no-op.
+func TestChangeAddresses(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	if err := st.AddAddress(0, "m/84'/1'/0'/0/0", "bcrt1receive", []byte{2}); err != nil {
+		t.Fatalf("AddAddress: %v", err)
+	}
+	for range 2 {
+		if err := st.AddChangeAddress(0, "m/84'/1'/0'/1/0", "bcrt1change", []byte{3}); err != nil {
+			t.Fatalf("AddChangeAddress: %v", err)
+		}
+	}
+	var change, cerr = st.ChangeAddresses()
+	if cerr != nil || len(change) != 1 || change[0].Address != "bcrt1change" || change[0].Path != "m/84'/1'/0'/1/0" {
+		t.Fatalf("ChangeAddresses = %+v, %v", change, cerr)
+	}
+	var receive, rerr = st.Addresses()
+	if rerr != nil || len(receive) != 1 || receive[0].Path != "m/84'/1'/0'/0/0" {
+		t.Fatalf("Addresses = %+v, %v", receive, rerr)
+	}
+}

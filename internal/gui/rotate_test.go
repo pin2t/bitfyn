@@ -3,6 +3,7 @@ package gui
 import "bytes"
 import "reflect"
 import "testing"
+import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/test"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
@@ -90,5 +91,35 @@ func TestShowBalance(t *testing.T) {
 	g.showBalance(1_250_000, -50_000)
 	if g.balance.Text != "1 200 000 sats" || g.pending.Visible() {
 		t.Fatalf("pending spend: %q, note visible %v", g.balance.Text, g.pending.Visible())
+	}
+}
+
+// TestActions checks the Receive and Send buttons: labels, icons, and
+// Receive laid out left of Send, both under the balance.
+func TestActions(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	w.Resize(fyne.NewSize(700, 800))
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	w.SetContent(g.content())
+	if g.receive.Text != "Receive" || g.receive.Icon != theme.DownloadIcon() {
+		t.Fatalf("receive button = %q with %v", g.receive.Text, g.receive.Icon)
+	}
+	if g.send.Text != "Send" || g.send.Icon != theme.UploadIcon() {
+		t.Fatalf("send button = %q with %v", g.send.Text, g.send.Icon)
+	}
+	var receiveAt = fyne.CurrentApp().Driver().AbsolutePositionForObject(g.receive)
+	var sendAt = fyne.CurrentApp().Driver().AbsolutePositionForObject(g.send)
+	var balanceAt = fyne.CurrentApp().Driver().AbsolutePositionForObject(g.balance)
+	if receiveAt.X >= sendAt.X || receiveAt.Y != sendAt.Y {
+		t.Fatalf("receive at %v, send at %v; want receive left of send on one row", receiveAt, sendAt)
+	}
+	if receiveAt.Y <= balanceAt.Y {
+		t.Fatalf("buttons at y %v not below the balance at y %v", receiveAt.Y, balanceAt.Y)
 	}
 }

@@ -183,8 +183,8 @@ func TestUsedAndWatch(t *testing.T) {
 		t.Fatal("address with a pending payment not reported used")
 	}
 	var pubkey = bytes.Repeat([]byte{2}, 33)
-	Watch("bc1next", pubkey)
-	Watch("bc1next", pubkey)
+	Watch("bc1next", "m/84'/1'/0'/0/1", pubkey)
+	Watch("bc1next", "m/84'/1'/0'/0/1", pubkey)
 	if len(watchedScripts()) != 2 {
 		t.Fatalf("watched scripts = %d, want 2", len(watchedScripts()))
 	}
@@ -208,8 +208,43 @@ func TestUsedAndWatch(t *testing.T) {
 func TestWatchBeforeInit(t *testing.T) {
 	resetSync()
 	scriptIndex = nil
-	Watch("bc1early", bytes.Repeat([]byte{2}, 33))
+	Watch("bc1early", "m/84'/1'/0'/0/9", bytes.Repeat([]byte{2}, 33))
 	if len(scripts) != 0 {
 		t.Fatalf("address watched before init: %v", scripts)
+	}
+}
+
+// TestCoins checks the spendable coin list: confirmed and pending receives,
+// minus coins spent by pending transactions, with their key paths.
+func TestCoins(t *testing.T) {
+	var mine = testWallet(t)
+	scripts[0].path = "m/84'/1'/0'/0/0"
+	var first = testTx(wire.OutPoint{Hash: chainhash.Hash{1}}, mine)
+	var second = testTx(wire.OutPoint{Hash: chainhash.Hash{2}}, []byte{0x51}, mine)
+	if _, err := processBlock(20, testBlock(first, second)); err != nil {
+		t.Fatalf("processBlock: %v", err)
+	}
+	acceptPendingTx(&conn{addr: "p"}, testTx(wire.OutPoint{Hash: chainhash.Hash{3}}, mine))
+	var list = Coins()
+	if len(list) != 3 || list[0].Value != 2000 || !list[0].Confirmed || list[2].Confirmed || list[0].Path != "m/84'/1'/0'/0/0" {
+		t.Fatalf("coins = %+v", list)
+	}
+	acceptPendingTx(&conn{addr: "p"}, testTx(wire.OutPoint{Hash: second.TxHash(), Index: 1}, []byte{0x52}))
+	list = Coins()
+	if len(list) != 2 || list[0].Value != 1000 {
+		t.Fatalf("coins after a pending spend = %+v", list)
+	}
+}
+
+// TestBroadcastNeedsPeers checks that nothing is recorded when no peer is
+// connected to send the transaction to.
+func TestBroadcastNeedsPeers(t *testing.T) {
+	var mine = testWallet(t)
+	pool = nil
+	if _, err := Broadcast(testTx(wire.OutPoint{Hash: chainhash.Hash{4}}, mine)); err == nil {
+		t.Fatal("broadcast without peers succeeded")
+	}
+	if list, _ := store.PendingTransactions(); len(list) != 0 {
+		t.Fatalf("pending after a failed broadcast: %+v", list)
 	}
 }

@@ -3,12 +3,14 @@ package sync
 import "bytes"
 import "fmt"
 import "log"
+import "sort"
 import "sync"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/peer"
 import "github.com/btcsuite/btcd/wire"
 import "bitfyn/internal/storage"
+import "bitfyn/internal/wallet"
 
 // pendingExpiry drops unconfirmed transactions that never confirmed. It is
 // the default mempool expiry of Bitcoin Core.
@@ -27,6 +29,8 @@ var pendingIDs map[chainhash.Hash]bool
 var pendingSpends map[wire.OutPoint]chainhash.Hash
 var seenTxs = make(map[chainhash.Hash]bool)
 var usedAddrs map[string]bool
+var coins []wallet.Coin
+var pendingTxs []*wire.MsgTx
 var confirmedBalance int64
 var pendingBalance int64
 
@@ -74,15 +78,33 @@ func loadWalletLocked() error {
 	}
 	outpoints = make(map[wire.OutPoint]string)
 	usedAddrs = make(map[string]bool)
-	for _, tx := range append(confirmed, unconfirmed...) {
+	var unspent = make(map[wire.OutPoint]wallet.Coin)
+	for n, tx := range append(confirmed, unconfirmed...) {
 		var txid = tx.TxHash()
 		for i, out := range tx.TxOut {
-			if idx, ok := scriptIndex[string(out.PkScript)]; ok {
-				outpoints[wire.OutPoint{Hash: txid, Index: uint32(i)}] = scripts[idx].address
-				usedAddrs[scripts[idx].address] = true
-			}
+			var idx, ok = scriptIndex[string(out.PkScript)]
+			if !ok { continue }
+			var w = scripts[idx]
+			var op = wire.OutPoint{Hash: txid, Index: uint32(i)}
+			outpoints[op] = w.address
+			usedAddrs[w.address] = true
+			unspent[op] = wallet.Coin{OutPoint: op, Value: out.Value, PkScript: out.PkScript, Address: w.address, Path: w.path, Confirmed: n < len(confirmed)}
 		}
 	}
+	for _, tx := range append(confirmed, unconfirmed...) {
+		for _, in := range tx.TxIn {
+			delete(unspent, in.PreviousOutPoint)
+		}
+	}
+	coins = make([]wallet.Coin, 0, len(unspent))
+	for _, c := range unspent {
+		coins = append(coins, c)
+	}
+	sort.Slice(coins, func(i, j int) bool {
+		if coins[i].Value != coins[j].Value { return coins[i].Value > coins[j].Value }
+		return coins[i].OutPoint.String() < coins[j].OutPoint.String()
+	})
+	pendingTxs = unconfirmed
 	confirmedBalance, pendingBalance = computeBalance(confirmed, unconfirmed, isWalletScript)
 	return nil
 }
@@ -143,11 +165,20 @@ func IsUsed(address string) bool {
 	return usedAddrs[address]
 }
 
-// Watch adds a newly derived P2WPKH wallet address to the watched scripts,
-// so filters, blocks and relayed transactions are matched against it too,
-// and refreshes the peers' bloom filters. It does nothing before the sync is
-// initialised: Init loads every stored address.
-func Watch(address string, pubkey []byte) {
+// Coins returns the spendable wallet coins, confirmed and unconfirmed, the
+// largest first.
+func Coins() []wallet.Coin {
+	walletMu.Lock()
+	defer walletMu.Unlock()
+	return append([]wallet.Coin(nil), coins...)
+}
+
+// Watch adds a newly derived P2WPKH wallet address, receive or change, with
+// the derivation path of its key to the watched scripts, so filters, blocks
+// and relayed transactions are matched against it too, and refreshes the
+// peers' bloom filters. It does nothing before the sync is initialised: Init
+// loads every stored address.
+func Watch(address, path string, pubkey []byte) {
 	var script = p2wpkhScript(pubkey)
 	walletMu.Lock()
 	if scriptIndex == nil {
@@ -159,7 +190,7 @@ func Watch(address string, pubkey []byte) {
 		return
 	}
 	scriptIndex[string(script)] = len(scripts)
-	scripts = append(scripts, watchScript{address: address, script: script})
+	scripts = append(scripts, watchScript{address: address, path: path, script: script})
 	walletMu.Unlock()
 	log.Printf("sync: watching address %s", address)
 	reloadBlooms()
@@ -327,4 +358,60 @@ func walletChanged() {
 	log.Printf("balance: %d sat confirmed, %+d sat pending", confirmed, pending)
 	reloadBlooms()
 	emit()
+}
+
+// Broadcast sends a signed wallet transaction to every connected peer and
+// records it as pending, so the balance reflects it at once. It is sent
+// again to every peer that connects until it confirms. It returns the
+// number of peers it was sent to. Transactions go out with witness encoding:
+// the plain QueueMessage would strip the signatures of segwit inputs.
+func Broadcast(tx *wire.MsgTx) (int, error) {
+	var peers = livePeers(poolPeers())
+	if len(peers) == 0 {
+		return 0, fmt.Errorf("not connected to any peer")
+	}
+	var txid = tx.TxHash()
+	var buf bytes.Buffer
+	if err := tx.Serialize(&buf); err != nil {
+		return 0, fmt.Errorf("serialize tx %s: %w", txid, err)
+	}
+	walletMu.Lock()
+	var err = store.SavePending(storage.PendingTx{Txid: txid, Raw: buf.Bytes(), SeenAt: time.Now().Unix()})
+	if err == nil {
+		seenTxs[txid] = true
+		describeTx(tx, "sent,")
+		err = loadWalletLocked()
+	}
+	walletMu.Unlock()
+	if err != nil {
+		return 0, fmt.Errorf("record tx %s: %w", txid, err)
+	}
+	for _, c := range peers {
+		c.peer.QueueMessageWithEncoding(tx, nil, wire.WitnessEncoding)
+	}
+	log.Printf("send: tx %s broadcast to %d peers", txid, len(peers))
+	walletChanged()
+	return len(peers), nil
+}
+
+// rebroadcast sends the pending transactions spending wallet coins, the
+// wallet's own unconfirmed payments, to a newly connected peer.
+func rebroadcast(c *conn) {
+	walletMu.Lock()
+	var own []*wire.MsgTx
+	for _, tx := range pendingTxs {
+		for _, in := range tx.TxIn {
+			if _, ok := outpoints[in.PreviousOutPoint]; ok {
+				own = append(own, tx)
+				break
+			}
+		}
+	}
+	walletMu.Unlock()
+	for _, tx := range own {
+		c.peer.QueueMessageWithEncoding(tx, nil, wire.WitnessEncoding)
+	}
+	if len(own) > 0 {
+		log.Printf("send: %d pending transactions sent again to %s", len(own), c.addr)
+	}
 }

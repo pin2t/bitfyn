@@ -42,3 +42,45 @@ func TestBalanceText(t *testing.T) {
 		t.Errorf("outgoing: %q, %q", got, note)
 	}
 }
+
+// TestParseAmount checks both units, grouping spaces, empty input and the
+// rejected forms.
+func TestParseAmount(t *testing.T) {
+	var cases = []struct {
+		text, unit string
+		want       int64
+		ok         bool
+	}{
+		{"", unitSats, 0, true},
+		{"1 234 567", unitSats, 1_234_567, true},
+		{"12.5", unitSats, 0, false},
+		{"-5", unitSats, 0, false},
+		{"0.0015", unitBTC, 150_000, true},
+		{".5", unitBTC, 50_000_000, true},
+		{"1 234.456789", unitBTC, 123_445_678_900, true},
+		{"2", unitBTC, 200_000_000, true},
+		{"0.000000001", unitBTC, 0, false},
+		{"-0.1", unitBTC, 0, false},
+		{"abc", unitBTC, 0, false},
+		{"21000001", unitBTC, 0, false},
+	}
+	for _, c := range cases {
+		var got, err = parseAmount(c.text, c.unit)
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("parseAmount(%q, %s) = %d, %v; want %d ok=%v", c.text, c.unit, got, err, c.want, c.ok)
+		}
+	}
+}
+
+// TestInvoiceURI checks the BIP21 invoice with and without an amount.
+func TestInvoiceURI(t *testing.T) {
+	if got := invoiceURI("bc1qexample", 0); got != "bitcoin:bc1qexample" {
+		t.Errorf("no amount: %q", got)
+	}
+	if got := invoiceURI("bc1qexample", 150_000); got != "bitcoin:bc1qexample?amount=0.0015" {
+		t.Errorf("with amount: %q", got)
+	}
+	if got := unitText(150_000, unitSats) + " " + unitText(150_000, unitBTC); got != "150000 0.0015" {
+		t.Errorf("unitText = %q", got)
+	}
+}

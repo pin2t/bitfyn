@@ -15,7 +15,8 @@ import "github.com/tyler-smith/go-bip39"
 // Purpose is BIP84: native SegWit, derivation m/84'/coin'/account'/change/index.
 const Purpose = 84
 
-// Wallet is a BIP84 HD wallet for account 0, external (receive) chain.
+// Wallet is a BIP84 HD wallet for account 0, with its external (receive)
+// and internal (change) chains.
 type Wallet struct {
 	net      *chaincfg.Params
 	coin     uint32
@@ -77,12 +78,27 @@ func (w *Wallet) AccountXPub() (string, error) {
 	return xpub, nil
 }
 
+// ReceiveChain and ChangeChain are the BIP44 chains of account 0: external
+// addresses handed out to payers and internal addresses for change.
+const ReceiveChain = 0
+const ChangeChain = 1
+
 // DeriveAddress derives the P2WPKH address at index on the external chain
 // and returns the bech32 address, its derivation path and the compressed
 // public key.
 func (w *Wallet) DeriveAddress(index uint32) (address, path string, pubkey []byte, err error) {
-	path = fmt.Sprintf("m/%d'/%d'/%d'/%d/%d", Purpose, w.coin, 0, 0, index)
-	key, err := w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0), 0, index})
+	return w.deriveOn(ReceiveChain, index)
+}
+
+// DeriveChangeAddress derives the P2WPKH change address at index on the
+// internal chain, like DeriveAddress.
+func (w *Wallet) DeriveChangeAddress(index uint32) (address, path string, pubkey []byte, err error) {
+	return w.deriveOn(ChangeChain, index)
+}
+
+func (w *Wallet) deriveOn(chain, index uint32) (address, path string, pubkey []byte, err error) {
+	path = fmt.Sprintf("m/%d'/%d'/%d'/%d/%d", Purpose, w.coin, 0, chain, index)
+	key, err := w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0), chain, index})
 	if err != nil { return "", "", nil, err }
 	pub, err := key.ECPubKey()
 	if err != nil {
