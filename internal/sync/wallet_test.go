@@ -7,8 +7,10 @@ import "testing"
 import "time"
 import "github.com/btcsuite/btcd/btcutil"
 import "github.com/btcsuite/btcd/btcutil/bloom"
+import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/wire"
+import "bitfyn/internal/spv"
 import "bitfyn/internal/storage"
 
 // testWallet opens a fresh store watching one P2WPKH script.
@@ -215,19 +217,37 @@ func TestWatchBeforeInit(t *testing.T) {
 }
 
 // TestCoins checks the spendable coin list: confirmed and pending receives,
-// minus coins spent by pending transactions, with their key paths.
+// minus coins spent by pending transactions, with their key paths and the
+// time they appeared, the block time or the time first seen.
 func TestCoins(t *testing.T) {
 	var mine = testWallet(t)
 	scripts[0].path = "m/84'/1'/0'/0/0"
+	var genesis = chaincfg.RegressionNetParams.GenesisBlock.Header
+	chain = spv.NewChain(&chaincfg.RegressionNetParams)
+	if err := chain.Add(&genesis); err != nil {
+		t.Fatalf("add genesis: %v", err)
+	}
+	var blockAt = genesis.Timestamp.Add(20 * 10 * time.Minute)
+	for h := 1; h <= 20; h++ {
+		var tip, _ = chain.Tip()
+		var hdr = mineHeader(tip.Hash, easyBits, genesis.Timestamp.Add(time.Duration(h)*10*time.Minute))
+		if err := chain.AppendTrusted(&hdr); err != nil {
+			t.Fatalf("append header %d: %v", h, err)
+		}
+	}
 	var first = testTx(wire.OutPoint{Hash: chainhash.Hash{1}}, mine)
 	var second = testTx(wire.OutPoint{Hash: chainhash.Hash{2}}, []byte{0x51}, mine)
 	if _, err := processBlock(20, testBlock(first, second)); err != nil {
 		t.Fatalf("processBlock: %v", err)
 	}
 	acceptPendingTx(&conn{addr: "p"}, testTx(wire.OutPoint{Hash: chainhash.Hash{3}}, mine))
+	var seen = time.Now().Unix()
 	var list = Coins()
 	if len(list) != 3 || list[0].Value != 2000 || !list[0].Confirmed || list[2].Confirmed || list[0].Path != "m/84'/1'/0'/0/0" {
 		t.Fatalf("coins = %+v", list)
+	}
+	if list[0].Time != blockAt.Unix() || list[2].Time < seen-5 || list[2].Time > seen {
+		t.Fatalf("coin times %d and %d, want the block time %d and about %d", list[0].Time, list[2].Time, blockAt.Unix(), seen)
 	}
 	acceptPendingTx(&conn{addr: "p"}, testTx(wire.OutPoint{Hash: second.TxHash(), Index: 1}, []byte{0x52}))
 	list = Coins()

@@ -46,7 +46,9 @@ func Run(opts Options) {
 		w.ShowAndRun()
 		return
 	}
+	var ticks = make(chan struct{})
 	w.SetOnClosed(func() {
+		close(ticks)
 		sync.Stop()
 		rates.Stop()
 		_ = gui.store.Close()
@@ -54,6 +56,7 @@ func Run(opts Options) {
 	w.SetContent(gui.tabs(gui.content()))
 	a.Lifecycle().SetOnStarted(func() {
 		gui.startSync(opts.Peer)
+		go gui.tickTimes(ticks)
 		rates.Start(gui.store, func(r storage.Rate) {
 			fyne.Do(func() { gui.setRate(r.Cents) })
 		})
@@ -81,6 +84,7 @@ type gui struct {
 	status *widget.Label
 	receive *widget.Button
 	send    *widget.Button
+	coinsView *coinsView
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -233,6 +237,7 @@ func (g *gui) startSync(peer string) {
 			g.signal.SetLevel(s.Bars())
 			g.status.SetText(s.String())
 			g.showBalance(s.Balance, s.Pending)
+			if g.coinsView != nil { g.coinsView.update(sync.Coins(), time.Now()) }
 			g.rotateIfUsed()
 		})
 	})
