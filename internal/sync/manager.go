@@ -18,6 +18,10 @@ import "bitfyn/internal/storage"
 // TargetPeers is the number of peer connections the manager keeps open.
 const TargetPeers = 3
 
+// connectWorkers is how many candidates are dialed at once while the pool is
+// first filled.
+const connectWorkers = 5
+
 // anchorPeerLimit is how many peers are asked for the first filter header
 // when majority proving the filter header chain anchor; anchorDialers is how
 // many of them are dialed at once.
@@ -204,19 +208,20 @@ func pause(delay time.Duration) bool {
 	}
 }
 
-// maintain keeps the pool filled up to TargetPeers, dialing the next
-// candidates concurrently. While a pinned peer is set, one slot is kept for
-// it; keepPinned dials it on its own.
+// maintain fills the pool with fillPool and then keeps it filled up to
+// TargetPeers, dialing as many next candidates concurrently as peers are
+// missing. While a pinned peer is set, one slot is kept for it; keepPinned
+// dials it on its own.
 func maintain() {
 	defer wg.Done()
+	fillPool()
 	for {
 		select {
 		case <-stop:
 			return
 		default:
 		}
-		var need = TargetPeers - poolSize()
-		if pinnedAddr != "" && pinnedConn() == nil { need-- }
+		var need = openSlots()
 		var wait = retryDelay
 		if need > 0 {
 			var addrs = takeCandidates(need)
@@ -225,7 +230,7 @@ func maintain() {
 				dials.Add(1)
 				go func() {
 					defer dials.Done()
-					connect(addr, false)
+					connect(dialCtx, addr, false)
 				}()
 			}
 			dials.Wait()
@@ -240,6 +245,66 @@ func maintain() {
 	}
 }
 
+// fillPool connects the first peers quickly: connectWorkers goroutines each
+// take the next candidate of a freshly shuffled list, dial it, and repeat
+// until the pool is full or the list runs out. The handshakes still in flight
+// once the pool is full are abandoned. The candidates not dialed are left for
+// maintain to continue with.
+func fillPool() {
+	if openSlots() <= 0 { return }
+	var list, err = peerCandidates(params, store, pinnedAddr)
+	if err != nil {
+		log.Printf("peer discovery: %v", err)
+		return
+	}
+	var ctx, cancel = context.WithCancel(dialCtx)
+	defer cancel()
+	var work = make(chan string)
+	var workers sync.WaitGroup
+	for range connectWorkers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for addr := range work {
+				if connect(ctx, addr, false) && openSlots() <= 0 { cancel() }
+			}
+		}()
+	}
+	var fed = 0
+feed:
+	for fed < len(list) && openSlots() > 0 {
+		select {
+		case work <- list[fed]:
+			fed++
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(work)
+	workers.Wait()
+	mu.Lock()
+	candidates = list
+	candNext = fed
+	var count = len(pool)
+	mu.Unlock()
+	log.Printf("peers: initial connect dialed %d of %d candidates, %d connected", fed, len(list), count)
+}
+
+// openSlots is how many more peers the pool takes: TargetPeers less the
+// connected peers, and less one kept for a pinned peer while it is away.
+func openSlots() int {
+	mu.Lock()
+	defer mu.Unlock()
+	return openSlotsLocked()
+}
+
+// openSlotsLocked is openSlots with mu held.
+func openSlotsLocked() int {
+	var n = TargetPeers - len(pool)
+	if pinnedAddr != "" && !slices.ContainsFunc(pool, func(c *conn) bool { return c.pinned }) { n-- }
+	return n
+}
+
 // keepPinned keeps the pinned peer connected: it dials it, waits for the
 // connection to drop and dials again. It backs off while the peer is
 // unreachable or keeps dropping the connection soon after the handshake, as
@@ -248,7 +313,7 @@ func keepPinned() {
 	defer wg.Done()
 	var backoff = retryDelay
 	for {
-		if connect(pinnedAddr, true) {
+		if connect(dialCtx, pinnedAddr, true) {
 			var c = pinnedConn()
 			var since = time.Now()
 			if c != nil {
@@ -377,13 +442,16 @@ func takeCandidates(n int) []string {
 
 // connect dials one candidate and adds it to the pool, reporting whether it
 // joined. A peer without the compact filters service is dropped after its
-// services are stored.
-func connect(addr string, pinned bool) bool {
+// services are stored, and so is one completing its handshake after the pool
+// was filled by others. A dial abandoned through ctx is not held against the
+// peer.
+func connect(ctx context.Context, addr string, pinned bool) bool {
 	var c, err = newConn(addr)
 	if err != nil { return false }
 	c.pinned = pinned
-	handshake, err := c.dial(true)
+	handshake, err := c.dial(ctx, true)
 	if err != nil {
+		if ctx.Err() != nil { return false }
 		log.Printf("peer %s: connect failed: %v", addr, err)
 		if rerr := store.RecordPeerResult(c.host, c.port, false, 0); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
@@ -408,6 +476,12 @@ func connect(addr string, pinned bool) bool {
 	mu.Lock()
 	if stopped {
 		mu.Unlock()
+		c.close()
+		return false
+	}
+	if !pinned && openSlotsLocked() <= 0 {
+		mu.Unlock()
+		log.Printf("peer %s: pool already full, disconnecting", addr)
 		c.close()
 		return false
 	}
@@ -592,7 +666,7 @@ feed:
 func dialAnchor(addr string) (chainhash.Hash, error) {
 	var c, err = newConn(addr)
 	if err != nil { return chainhash.Hash{}, err }
-	if _, err := c.dial(false); err != nil {
+	if _, err := c.dial(dialCtx, false); err != nil {
 		_ = store.RecordPeerResult(c.host, c.port, false, 0)
 		return chainhash.Hash{}, err
 	}
