@@ -33,7 +33,7 @@ type Options struct {
 func Run(opts Options) {
 	var a = app.NewWithID("bitfyn.wallet")
 	var w = a.NewWindow("BitFyn")
-	w.Resize(fyne.NewSize(700, 800))
+	w.Resize(fyne.NewSize(600, 800))
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
 	var gui, err = newGUI(opts, w)
@@ -51,7 +51,7 @@ func Run(opts Options) {
 		rates.Stop()
 		_ = gui.store.Close()
 	})
-	w.SetContent(gui.content())
+	w.SetContent(gui.tabs(gui.content()))
 	a.Lifecycle().SetOnStarted(func() {
 		gui.startSync(opts.Peer)
 		rates.Start(gui.store, func(r storage.Rate) {
