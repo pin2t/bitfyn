@@ -136,7 +136,8 @@ func TestActions(t *testing.T) {
 }
 
 // TestSignalAlignment checks that the highest connectivity bar ends where the
-// status text under it ends.
+// status text under it ends, and that the text starts one padding under the
+// bars, on the line of the network name.
 func TestSignalAlignment(t *testing.T) {
 	var app = test.NewApp()
 	defer app.Quit()
@@ -156,5 +157,14 @@ func TestSignalAlignment(t *testing.T) {
 	var textEnd = driver.AbsolutePositionForObject(g.status).X + g.status.Size().Width - theme.InnerPadding()
 	if barsEnd != textEnd {
 		t.Fatalf("highest bar ends at %v, status text at %v", barsEnd, textEnd)
+	}
+	var barsBottom = driver.AbsolutePositionForObject(g.signal).Y + g.signal.Size().Height
+	var status = driver.AbsolutePositionForObject(g.status)
+	if textTop := status.Y + theme.InnerPadding(); textTop != barsBottom+theme.Padding() {
+		t.Fatalf("status text starts at %v, bars end at %v, want one padding apart", textTop, barsBottom)
+	}
+	var network = driver.AbsolutePositionForObject(content.(*fyne.Container).Objects[0].(*fyne.Container).Objects[2])
+	if network.Y != status.Y {
+		t.Fatalf("network name at y %v, status at y %v", network.Y, status.Y)
 	}
 }

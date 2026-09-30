@@ -55,11 +55,11 @@ func (balanceLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	objects[2].Move(fyne.NewPos(usdRight(objects, center)-usd.Width, row-usdLift()))
 }
 
-// usdLift raises the USD value into the padding under the balance, one text
-// padding, so it reads as part of the balance. The rows keep their height:
-// the space it leaves goes under it, apart from the widgets below.
+// usdLift raises the USD value into the padding under the balance, the text
+// padding of both, so it reads as part of the balance. The rows keep their
+// height: the space it leaves goes under it, apart from the widgets below.
 func usdLift() float32 {
-	return theme.InnerPadding()
+	return 2 * theme.InnerPadding()
 }
 
 // usdRight is the right edge of the USD widget when the balance is centred on

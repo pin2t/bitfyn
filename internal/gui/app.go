@@ -137,9 +137,9 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 }
 
 // content builds the window layout: the title on the top row with the
-// connectivity bars at its right, the status line below the bars, its text
-// ending where the highest bar ends, sharing its row with the network name
-// off mainnet, then the address QR code and the address text right below it
+// connectivity bars at its right, the status line right under the bars, its
+// text ending where the highest bar ends, sharing its line with the network
+// name off mainnet, then the address QR code and the address text right below it
 // with a clipboard copy icon directly after the text, then the wallet balance
 // in large type with a small grey note on the incoming pending part at its
 // right and the balance in US dollars close under it in smaller grey type,
@@ -170,17 +170,8 @@ func (g *gui) content() fyne.CanvasObject {
 	g.balanceRow = container.New(balanceLayout{}, g.balance, g.pending, g.usd)
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
-	var titleRow = container.NewStack(
-		container.NewCenter(title),
-		container.NewHBox(layout.NewSpacer(), container.NewCenter(signalInset(g.signal))),
-	)
-	var statusRow = container.NewStack(
-		container.NewCenter(network),
-		container.NewHBox(layout.NewSpacer(), g.status),
-	)
 	return container.NewVBox(
-		titleRow,
-		statusRow,
+		container.New(headerLayout{}, title, signalInset(g.signal), network, g.status),
 		container.NewCenter(g.qr),
 		container.NewCenter(container.NewHBox(g.addr, copyBtn)),
 		g.balanceRow,
