@@ -163,6 +163,9 @@ func TestCoinsView(t *testing.T) {
 	if v.send.Text != "Send" || v.send.Icon != theme.UploadIcon() {
 		t.Fatal("Send button must read Send with the upload arrow")
 	}
+	if v.merge.Text != "Merge" || !v.merge.Disabled() || v.split.Text != "Split" || !v.split.Disabled() {
+		t.Fatal("Merge and Split buttons must be there, disabled until they work")
+	}
 	v.update(nil, now)
 	if !v.empty.Visible() || len(v.list.Objects) != 0 {
 		t.Fatal("placeholder not back once the coins are spent")
@@ -188,7 +191,7 @@ func TestCoinsHeaderAlignment(t *testing.T) {
 	var now = time.Now()
 	g.coinsView.update(testCoins(now, g.addr.Text), now)
 	w.Resize(fyne.NewSize(700, 801))
-	var header = g.coinsView.content.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*fyne.Container)
+	var header = g.coinsView.content.Objects[0].(*fyne.Container).Objects[0].(*fyne.Container).Objects[0].(*fyne.Container)
 	var headerTime = header.Objects[0].(*fyne.Container).Objects[0]
 	var cardTime = g.coinsView.times[0]
 	var driver = app.Driver()
@@ -196,5 +199,69 @@ func TestCoinsHeaderAlignment(t *testing.T) {
 	var cx = driver.AbsolutePositionForObject(cardTime).X
 	if hx != cx {
 		t.Fatalf("header Time at x %v, card time at x %v", hx, cx)
+	}
+}
+
+// manyCoins are n confirmed coins a minute apart.
+func manyCoins(n int, now time.Time, address string) []wallet.Coin {
+	var coins = make([]wallet.Coin, n)
+	for i := range coins {
+		coins[i] = wallet.Coin{OutPoint: wire.OutPoint{Hash: chainhash.Hash{byte(i + 1)}}, Value: int64(1_000 + i), Address: address, Confirmed: true, Time: now.Add(-time.Duration(i) * time.Minute).Unix()}
+	}
+	return coins
+}
+
+// TestCoinsLayout checks the gaps at the sides of the cards, Merge and Split
+// left of Send, the buttons right under a short list, and a long list
+// scrolling with the buttons kept a gap above the window's bottom.
+func TestCoinsLayout(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	var tabs = g.tabs(g.content())
+	w.SetContent(tabs)
+	w.Resize(fyne.NewSize(700, 600))
+	tabs.SelectIndex(1)
+	var v = g.coinsView
+	var driver = app.Driver()
+	var now = time.Now()
+	var check = func(n int) {
+		v.update(manyCoins(n, now, g.addr.Text), now)
+		var top = driver.AbsolutePositionForObject(v.content)
+		var size = v.content.Size()
+		var card = v.list.Objects[0]
+		var cardPos = driver.AbsolutePositionForObject(card)
+		if left := cardPos.X - top.X; left < coinsGap() {
+			t.Errorf("%d coins: card %v from the left, want at least %v", n, left, coinsGap())
+		}
+		if right := top.X + size.Width - cardPos.X - card.Size().Width; right < coinsGap() {
+			t.Errorf("%d coins: card %v from the right, want at least %v", n, right, coinsGap())
+		}
+		var merge, split, send = driver.AbsolutePositionForObject(v.merge), driver.AbsolutePositionForObject(v.split), driver.AbsolutePositionForObject(v.send)
+		if !(merge.X < split.X && split.X < send.X) || merge.Y != send.Y || split.Y != send.Y {
+			t.Errorf("%d coins: Merge at %v, Split at %v, Send at %v, want one row in that order", n, merge, split, send)
+		}
+		var list = v.content.Objects[1]
+		var listBottom = driver.AbsolutePositionForObject(list).Y + list.Size().Height
+		if send.Y < listBottom || send.Y > listBottom+2*theme.Padding() {
+			t.Errorf("%d coins: Send at y %v, list ends at %v", n, send.Y, listBottom)
+		}
+		if gap := top.Y + size.Height - send.Y - v.send.Size().Height; gap < coinsGap() {
+			t.Errorf("%d coins: Send %v above the bottom, want at least %v", n, gap, coinsGap())
+		}
+	}
+	check(2)
+	if list := v.content.Objects[1].Size().Height; list != v.list.MinSize().Height {
+		t.Errorf("short list %v high, want its cards' %v", list, v.list.MinSize().Height)
+	}
+	check(40)
+	if list := v.content.Objects[1].Size().Height; list >= v.list.MinSize().Height {
+		t.Errorf("long list %v high, not scrolling its cards' %v", list, v.list.MinSize().Height)
 	}
 }
