@@ -23,6 +23,15 @@ var hourglassIcon = theme.NewThemedResource(fyne.NewStaticResource("hourglass.sv
 		`<path d="M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6z`+
 		`m10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z"/></svg>`)))
 
+// mergeIcon and splitIcon are the Material Design "call_merge" and
+// "call_split" icons, recoloured with the theme.
+var mergeIcon = theme.NewThemedResource(fyne.NewStaticResource("merge.svg", []byte(
+	`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">`+
+		`<path d="M17 20.41L18.41 19 15 15.59 13.59 17 17 20.41zM7.5 8H11v5.59L5.59 19 7 20.41l6-6V8h3.5L12 3.5 7.5 8z"/></svg>`)))
+var splitIcon = theme.NewThemedResource(fyne.NewStaticResource("split.svg", []byte(
+	`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">`+
+		`<path d="M14 4l2.29 2.29-2.88 2.88 1.42 1.42 2.88-2.88L20 10V4zm-4 0H4v6l2.29-2.29 4.71 4.7V20h2v-8.41l-5.29-5.3z"/></svg>`)))
+
 // arrowUp and arrowDown are the small triangles of the sort controls.
 var arrowUp = fyne.NewStaticResource("sort-up.svg", []byte(
 	`<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 7.5L6 .5l5 7z"/></svg>`))
@@ -43,15 +52,18 @@ const sortByTime coinSort = 0
 const sortByAmount coinSort = 1
 
 // coinsView is the Coins tab: a header naming the columns, with sort arrows
-// on Time and Amount, over a scrolling list of cards, one per spendable coin,
-// and the Send button at the bottom.
+// on Time and Amount, over a list of cards, one per spendable coin, followed
+// by the Merge, Split and Send buttons. A list taller than the window
+// scrolls, keeping the buttons in view.
 type coinsView struct {
 	g          *gui
-	content    fyne.CanvasObject
+	content    *fyne.Container
 	list       *fyne.Container
 	empty      *widget.Label
 	timeSort   *sortArrows
 	amountSort *sortArrows
+	merge      *widget.Button
+	split      *widget.Button
 	send       *widget.Button
 	coins      []wallet.Coin
 	shown      string
@@ -73,15 +85,65 @@ func newCoinsView(g *gui) *coinsView {
 		boldLabel("Address"),
 		container.NewHBox(layout.NewSpacer(), boldLabel("Amount"), container.NewCenter(v.amountSort)),
 	)
+	// Merge and Split do nothing yet: they will merge the selected coins to
+	// one address and split one coin to many.
+	v.merge = widget.NewButtonWithIcon("Merge", mergeIcon, nil)
+	v.merge.Disable()
+	v.split = widget.NewButtonWithIcon("Split", splitIcon, nil)
+	v.split.Disable()
 	v.send = widget.NewButtonWithIcon("Send", theme.UploadIcon(), g.showSend)
-	v.content = container.NewBorder(
-		container.NewPadded(header),
-		container.NewCenter(atLeastWide(v.send, actionWidth)),
-		nil, nil,
-		container.NewStack(container.NewCenter(v.empty), container.NewVScroll(v.list)),
+	var buttons = container.NewCenter(container.NewGridWithColumns(3,
+		atLeastWide(v.merge, actionWidth), atLeastWide(v.split, actionWidth), atLeastWide(v.send, actionWidth)))
+	var sides = layout.NewCustomPaddedLayout(0, 0, coinsGap(), coinsGap())
+	v.content = container.New(coinsLayout{v},
+		container.New(sides, container.NewPadded(header)),
+		container.NewStack(container.NewCenter(v.empty), container.NewVScroll(container.New(sides, v.list))),
+		buttons,
 	)
 	v.showArrows()
 	return v
+}
+
+// coinsGap is the space at either side of the cards and under the buttons.
+func coinsGap() float32 {
+	return 2 * theme.InnerPadding()
+}
+
+// coinsLayout puts the header at the top, the list under it as tall as its
+// cards, and the buttons right after the list, a gap above the window's
+// bottom. When the cards do not fit, the list takes the height left and
+// scrolls, the buttons staying in view.
+type coinsLayout struct {
+	v *coinsView
+}
+
+// listHeight is the height the list needs to show every card, or the empty
+// placeholder.
+func (l coinsLayout) listHeight() float32 {
+	if len(l.v.list.Objects) == 0 {
+		return l.v.empty.MinSize().Height
+	}
+	return l.v.list.MinSize().Height
+}
+
+func (l coinsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var header, buttons = objects[0].MinSize(), objects[2].MinSize()
+	var list = l.v.empty.MinSize().Height
+	return fyne.NewSize(max(header.Width, buttons.Width),
+		header.Height+list+theme.Padding()+buttons.Height+coinsGap())
+}
+
+func (l coinsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	var header, list, buttons = objects[0], objects[1], objects[2]
+	var headerHeight, buttonsHeight = header.MinSize().Height, buttons.MinSize().Height
+	var room = size.Height - headerHeight - theme.Padding() - buttonsHeight - coinsGap()
+	var listHeight = max(min(l.listHeight(), room), 0)
+	header.Resize(fyne.NewSize(size.Width, headerHeight))
+	header.Move(fyne.NewPos(0, 0))
+	list.Resize(fyne.NewSize(size.Width, listHeight))
+	list.Move(fyne.NewPos(0, headerHeight))
+	buttons.Resize(fyne.NewSize(size.Width, buttonsHeight))
+	buttons.Move(fyne.NewPos(0, headerHeight+listHeight+theme.Padding()))
 }
 
 func boldLabel(text string) *widget.Label {
@@ -133,6 +195,7 @@ func (v *coinsView) rebuild() {
 	} else {
 		v.empty.Hide()
 	}
+	v.content.Refresh()
 	v.showArrows()
 }
 
