@@ -73,7 +73,9 @@ type coinsView struct {
 	now        time.Time
 }
 
-// newCoinsView builds the Coins tab, empty, sorted newest first.
+// newCoinsView builds the Coins tab, empty, sorted newest first. Merge and
+// Split are disabled for now: they will merge the selected coins to one
+// address and split one coin to many.
 func newCoinsView(g *gui) *coinsView {
 	var v = &coinsView{g: g, by: sortByTime, now: time.Now()}
 	v.list = container.NewVBox()
@@ -85,8 +87,6 @@ func newCoinsView(g *gui) *coinsView {
 		boldLabel("Address"),
 		container.NewHBox(layout.NewSpacer(), boldLabel("Amount"), container.NewCenter(v.amountSort)),
 	)
-	// Merge and Split do nothing yet: they will merge the selected coins to
-	// one address and split one coin to many.
 	v.merge = widget.NewButtonWithIcon("Merge", mergeIcon, nil)
 	v.merge.Disable()
 	v.split = widget.NewButtonWithIcon("Split", splitIcon, nil)
