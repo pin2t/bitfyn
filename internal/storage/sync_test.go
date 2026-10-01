@@ -182,8 +182,8 @@ func TestUpgradeSchema(t *testing.T) {
 		t.Fatalf("FilterCount after upgrade = %d, %v; want 0", n, err)
 	}
 	var version int
-	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != filterPruneVersion {
-		t.Fatalf("user_version = %d, %v; want %d", version, err, filterPruneVersion)
+	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != rescanVersion {
+		t.Fatalf("user_version = %d, %v; want %d", version, err, rescanVersion)
 	}
 	if err := upgradeSchema(s.db); err != nil {
 		t.Fatalf("upgradeSchema again: %v", err)
@@ -329,5 +329,77 @@ func TestChangeAddresses(t *testing.T) {
 	var receive, rerr = st.Addresses()
 	if rerr != nil || len(receive) != 1 || receive[0].Path != "m/84'/1'/0'/0/0" {
 		t.Fatalf("Addresses = %+v, %v", receive, rerr)
+	}
+}
+
+// TestRescans checks that a queued rescan keeps the lowest height, and that
+// deleting a finished one keeps a rescan queued again from lower down.
+func TestRescans(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	for _, r := range []Rescan{{"bc1a", 20}, {"bc1a", 10}, {"bc1a", 30}, {"bc1b", 5}} {
+		if err := st.AddRescan(r); err != nil {
+			t.Fatalf("AddRescan %+v: %v", r, err)
+		}
+	}
+	var got, rerr = st.Rescans()
+	if rerr != nil || len(got) != 2 || got[0] != (Rescan{"bc1b", 5}) || got[1] != (Rescan{"bc1a", 10}) {
+		t.Fatalf("Rescans = %+v, %v", got, rerr)
+	}
+	if err := st.AddRescan(Rescan{"bc1b", 3}); err != nil {
+		t.Fatalf("AddRescan: %v", err)
+	}
+	if err := st.DeleteRescan(Rescan{"bc1b", 5}); err != nil {
+		t.Fatalf("DeleteRescan: %v", err)
+	}
+	if err := st.DeleteRescan(Rescan{"bc1a", 10}); err != nil {
+		t.Fatalf("DeleteRescan: %v", err)
+	}
+	got, rerr = st.Rescans()
+	if rerr != nil || len(got) != 1 || got[0] != (Rescan{"bc1b", 3}) {
+		t.Fatalf("Rescans after deletes = %+v, %v", got, rerr)
+	}
+}
+
+// TestUpgradeQueuesRescans checks that the schema upgrade queues a rescan of
+// every stored receive and change address once.
+func TestUpgradeQueuesRescans(t *testing.T) {
+	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	if err := st.AddAddress(0, "m/84'/0'/0'/0/0", "bc1receive", []byte{2}); err != nil {
+		t.Fatalf("AddAddress: %v", err)
+	}
+	if err := st.AddChangeAddress(0, "m/84'/0'/0'/1/0", "bc1change", []byte{3}); err != nil {
+		t.Fatalf("AddChangeAddress: %v", err)
+	}
+	if got, err := st.Rescans(); err != nil || len(got) != 0 {
+		t.Fatalf("Rescans before upgrade = %+v, %v", got, err)
+	}
+	if _, err := st.db.Exec(`pragma user_version = 3`); err != nil {
+		t.Fatalf("reset user_version: %v", err)
+	}
+	if err := upgradeSchema(st.db); err != nil {
+		t.Fatalf("upgradeSchema: %v", err)
+	}
+	var got, rerr = st.Rescans()
+	if rerr != nil || len(got) != 2 || got[0] != (Rescan{"bc1change", 0}) || got[1] != (Rescan{"bc1receive", 0}) {
+		t.Fatalf("Rescans after upgrade = %+v, %v", got, rerr)
+	}
+	for _, r := range got {
+		if err := st.DeleteRescan(r); err != nil {
+			t.Fatalf("DeleteRescan: %v", err)
+		}
+	}
+	if err := upgradeSchema(st.db); err != nil {
+		t.Fatalf("upgradeSchema again: %v", err)
+	}
+	if got, err := st.Rescans(); err != nil || len(got) != 0 {
+		t.Fatalf("Rescans after a second upgrade = %+v, %v", got, err)
 	}
 }

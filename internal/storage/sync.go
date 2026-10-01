@@ -58,6 +58,13 @@ type StoredAddress struct {
 	Pubkey  []byte
 }
 
+// Rescan is a queued rescan of the blocks from the height on for a wallet
+// address that was watched after blocks paying it were scanned.
+type Rescan struct {
+	Address string
+	From    int32
+}
+
 // Peer is one known network peer with its connection statistics.
 type Peer struct {
 	Host      string
@@ -396,6 +403,42 @@ func (s *Store) AddChangeAddress(index uint32, path, address string, pubkey []by
 		`insert or ignore into change_addresses (idx, derivationPath, address, pubkey, createdAt) values (?, ?, ?, ?, ?)`,
 		index, path, address, pubkey, time.Now().Unix(),
 	)
+	return err
+}
+
+// AddRescan queues a rescan for the address. An address queued already
+// keeps the lower height.
+func (s *Store) AddRescan(r Rescan) error {
+	var _, err = s.db.Exec(
+		`insert into rescans (address, fromHeight) values (?, ?)
+		on conflict (address) do update set fromHeight = min(fromHeight, excluded.fromHeight)`,
+		r.Address, r.From,
+	)
+	return err
+}
+
+// Rescans returns the queued rescans.
+func (s *Store) Rescans() ([]Rescan, error) {
+	var rows, err = s.db.Query(`select address, fromHeight from rescans order by fromHeight, address`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Rescan
+	for rows.Next() {
+		var r Rescan
+		if err := rows.Scan(&r.Address, &r.From); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteRescan removes the rescan once it is done. A rescan queued again
+// from a lower height in the meantime stays.
+func (s *Store) DeleteRescan(r Rescan) error {
+	var _, err = s.db.Exec(`delete from rescans where address = ? and fromHeight >= ?`, r.Address, r.From)
 	return err
 }
 

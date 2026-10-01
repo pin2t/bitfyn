@@ -89,6 +89,10 @@ create table if not exists rates (
 	ts    integer primary key,
 	cents integer not null
 );
+create table if not exists rescans (
+	address    text    primary key,
+	fromHeight integer not null
+);
 `
 
 // Meta is the single wallet metadata row.
@@ -140,8 +144,12 @@ func Open(path, passphrase string) (*Store, error) {
 // downloaded filter can be pruned, keeping only its chained header. The
 // cfilters table is rebuilt and rows are dropped because filters are
 // re-downloadable from peers and old rows predate the seed-start sync.
+// rescanVersion marks the revision that rescans the blocks of addresses
+// watched after blocks paying them were scanned. Every stored address is
+// queued once: older wallets may have missed spends of such coins.
 const filterHeaderVersion = 2
 const filterPruneVersion = 3
+const rescanVersion = 4
 
 func migrate(db *sql.DB) error {
 	var _, err = db.Exec(schema)
@@ -167,8 +175,15 @@ func upgradeSchema(db *sql.DB) error {
 			return err
 		}
 	}
-	if version < filterPruneVersion {
-		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, filterPruneVersion)); err != nil {
+	if version < rescanVersion {
+		if _, err := db.Exec(`
+			insert or ignore into rescans (address, fromHeight)
+			select address, 0 from addresses union select address, 0 from change_addresses`); err != nil {
+			return err
+		}
+	}
+	if version < rescanVersion {
+		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, rescanVersion)); err != nil {
 			return err
 		}
 	}

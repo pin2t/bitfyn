@@ -550,7 +550,7 @@ func syncLoop() {
 }
 
 // syncOnce brings headers up to the primary peer's tip, then filters and
-// wallet transactions up to the header tip. The first filter header is
+// wallet transactions up to the header tip, and runs the queued rescans. The first filter header is
 // majority proven once per run before the filter download starts. A primary
 // failing the header sync is disconnected so the next round uses another.
 func syncOnce(c *conn) error {
@@ -584,6 +584,9 @@ func syncOnce(c *conn) error {
 	n, err := syncFilters()
 	if err != nil {
 		return fmt.Errorf("filters: %w", err)
+	}
+	if err := rescan(); err != nil {
+		return fmt.Errorf("rescan: %w", err)
 	}
 	if n > 0 || chain.Height() != before {
 		log.Printf("sync: wallet synced to tip %d (%d new filters)", chain.Height(), n)
