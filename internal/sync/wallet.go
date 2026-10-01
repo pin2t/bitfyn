@@ -29,6 +29,7 @@ var pendingIDs map[chainhash.Hash]bool
 var pendingSpends map[wire.OutPoint]chainhash.Hash
 var seenTxs = make(map[chainhash.Hash]bool)
 var usedAddrs map[string]bool
+var firstPaid map[string]int32
 var coins []wallet.Coin
 var pendingTxs []*wire.MsgTx
 var confirmedBalance int64
@@ -53,6 +54,7 @@ func loadWalletLocked() error {
 		return fmt.Errorf("load pending transactions: %w", err)
 	}
 	var confirmed = make([]*wire.MsgTx, 0, len(stored))
+	var heights = make([]int32, 0, len(stored))
 	var times = make([]int64, 0, len(stored)+len(pending))
 	confirmedIDs = make(map[chainhash.Hash]bool, len(stored))
 	for _, t := range stored {
@@ -61,6 +63,7 @@ func loadWalletLocked() error {
 			return fmt.Errorf("decode stored tx %s: %w", t.Txid, err)
 		}
 		confirmed = append(confirmed, tx)
+		heights = append(heights, t.Height)
 		times = append(times, blockTime(t.Height))
 		confirmedIDs[t.Txid] = true
 	}
@@ -81,6 +84,7 @@ func loadWalletLocked() error {
 	}
 	outpoints = make(map[wire.OutPoint]string)
 	usedAddrs = make(map[string]bool)
+	firstPaid = make(map[string]int32)
 	var unspent = make(map[wire.OutPoint]wallet.Coin)
 	for n, tx := range append(confirmed, unconfirmed...) {
 		var txid = tx.TxHash()
@@ -91,6 +95,11 @@ func loadWalletLocked() error {
 			var op = wire.OutPoint{Hash: txid, Index: uint32(i)}
 			outpoints[op] = w.address
 			usedAddrs[w.address] = true
+			if n < len(confirmed) {
+				if h, ok := firstPaid[w.address]; !ok || heights[n] < h {
+					firstPaid[w.address] = heights[n]
+				}
+			}
 			unspent[op] = wallet.Coin{OutPoint: op, Value: out.Value, PkScript: out.PkScript, Address: w.address, Path: w.path, Confirmed: n < len(confirmed), Time: times[n]}
 		}
 	}
@@ -188,8 +197,12 @@ func Coins() []wallet.Coin {
 // Watch adds a newly derived P2WPKH wallet address, receive or change, with
 // the derivation path of its key to the watched scripts, so filters, blocks
 // and relayed transactions are matched against it too, and refreshes the
-// peers' bloom filters. It does nothing before the sync is initialised: Init
-// loads every stored address.
+// peers' bloom filters. The wallet is rebuilt: stored transactions may pay
+// the address already, when another wallet on the same seed used it first.
+// Their coins appear at once, and a rescan from the first block paying it is
+// queued, since their spends were not looked for in the blocks scanned
+// before. It does nothing before the sync is initialised: Init loads every
+// stored address.
 func Watch(address, path string, pubkey []byte) {
 	var script = p2wpkhScript(pubkey)
 	walletMu.Lock()
@@ -203,9 +216,23 @@ func Watch(address, path string, pubkey []byte) {
 	}
 	scriptIndex[string(script)] = len(scripts)
 	scripts = append(scripts, watchScript{address: address, path: path, script: script})
+	var err = loadWalletLocked()
+	var first, paid = firstPaid[address]
+	if err == nil && paid {
+		err = store.AddRescan(storage.Rescan{Address: address, From: first})
+	}
 	walletMu.Unlock()
 	log.Printf("sync: watching address %s", address)
-	reloadBlooms()
+	if err != nil {
+		log.Printf("sync: watch address %s: %v", address, err)
+	}
+	if !paid {
+		reloadBlooms()
+		return
+	}
+	log.Printf("sync: address %s was paid in block %d before it was watched, rescan queued", address, first)
+	walletChanged()
+	wakeSync()
 }
 
 // watchedScripts returns a snapshot of the watched wallet scripts.
