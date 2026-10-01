@@ -13,17 +13,17 @@ func TestSeedRates(t *testing.T) {
 	if _, err := s.LatestRate(); !errors.Is(err, ErrNoRate) {
 		t.Fatalf("LatestRate on empty table = %v, want ErrNoRate", err)
 	}
-	seeded, err := s.SeedRates([]Rate{{100, 7}, {300, 9}, {200, 8}})
-	if err != nil || !seeded {
-		t.Fatalf("SeedRates = %v, %v; want true, nil", seeded, err)
+	var seeded, serr = s.SeedRates([]Rate{{100, 7}, {300, 9}, {200, 8}})
+	if serr != nil || !seeded {
+		t.Fatalf("SeedRates = %v, %v; want true, nil", seeded, serr)
 	}
 	seeded, err = s.SeedRates([]Rate{{400, 1}})
 	if err != nil || seeded {
 		t.Fatalf("SeedRates on filled table = %v, %v; want false, nil", seeded, err)
 	}
-	latest, err := s.LatestRate()
-	if err != nil || latest != (Rate{300, 9}) {
-		t.Fatalf("LatestRate = %+v, %v; want {300 9}", latest, err)
+	var latest, lerr = s.LatestRate()
+	if lerr != nil || latest != (Rate{300, 9}) {
+		t.Fatalf("LatestRate = %+v, %v; want {300 9}", latest, lerr)
 	}
 	if err := s.AddRate(Rate{500, 12}); err != nil { t.Fatalf("AddRate: %v", err) }
 	latest, err = s.LatestRate()

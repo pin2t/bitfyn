@@ -14,9 +14,9 @@ func TestBIP84Vector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	addr, path, pub, err := w.DeriveAddress(0)
-	if err != nil {
-		t.Fatalf("DeriveAddress: %v", err)
+	var addr, path, pub, aerr = w.DeriveAddress(0)
+	if aerr != nil {
+		t.Fatalf("DeriveAddress: %v", aerr)
 	}
 	const wantAddr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
 	const wantPath = "m/84'/0'/0'/0/0"
@@ -38,9 +38,9 @@ func TestDeterministicDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	w2, err := New(vectorMnemonic, "", &chaincfg.MainNetParams)
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	var w2, werr = New(vectorMnemonic, "", &chaincfg.MainNetParams)
+	if werr != nil {
+		t.Fatalf("New: %v", werr)
 	}
 	var prev string
 	for i := uint32(0); i < 5; i++ {
@@ -48,9 +48,9 @@ func TestDeterministicDerivation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DeriveAddress(%d): %v", i, err)
 		}
-		a2, _, _, err := w2.DeriveAddress(i)
-		if err != nil {
-			t.Fatalf("DeriveAddress(%d) second wallet: %v", i, err)
+		var a2, _, _, a2err = w2.DeriveAddress(i)
+		if a2err != nil {
+			t.Fatalf("DeriveAddress(%d) second wallet: %v", i, a2err)
 		}
 		if a1 != a2 {
 			t.Errorf("index %d: address %s != %s across restores", i, a1, a2)
@@ -68,13 +68,13 @@ func TestTestnet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMnemonic: %v", err)
 	}
-	w, err := New(mnemonic, "", &chaincfg.TestNet3Params)
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	var w, newErr = New(mnemonic, "", &chaincfg.TestNet3Params)
+	if newErr != nil {
+		t.Fatalf("New: %v", newErr)
 	}
-	addr, path, _, err := w.DeriveAddress(0)
-	if err != nil {
-		t.Fatalf("DeriveAddress: %v", err)
+	var addr, path, _, addrErr = w.DeriveAddress(0)
+	if addrErr != nil {
+		t.Fatalf("DeriveAddress: %v", addrErr)
 	}
 	if !strings.HasPrefix(addr, "tb1") {
 		t.Errorf("testnet address = %s, want tb1 prefix", addr)
@@ -91,9 +91,9 @@ func TestAccountXPub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	xpub, err := w.AccountXPub()
-	if err != nil {
-		t.Fatalf("AccountXPub: %v", err)
+	var xpub, xerr = w.AccountXPub()
+	if xerr != nil {
+		t.Fatalf("AccountXPub: %v", xerr)
 	}
 	const want = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"
 	if xpub != want {

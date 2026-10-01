@@ -49,9 +49,9 @@ func loadWalletLocked() error {
 	if err != nil {
 		return fmt.Errorf("load transactions: %w", err)
 	}
-	pending, err := store.PendingTransactions()
-	if err != nil {
-		return fmt.Errorf("load pending transactions: %w", err)
+	var pending, perr = store.PendingTransactions()
+	if perr != nil {
+		return fmt.Errorf("load pending transactions: %w", perr)
 	}
 	var confirmed = make([]*wire.MsgTx, 0, len(stored))
 	var heights = make([]int32, 0, len(stored))

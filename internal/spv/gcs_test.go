@@ -22,9 +22,9 @@ func TestMatchScripts(t *testing.T) {
 	}
 	var blockHash chainhash.Hash
 	copy(blockHash[:16], key[:])
-	hits, err := MatchScripts(data, &blockHash, [][]byte{scriptA, scriptB, {0x51}})
-	if err != nil {
-		t.Fatalf("MatchScripts: %v", err)
+	var hits, herr = MatchScripts(data, &blockHash, [][]byte{scriptA, scriptB, {0x51}})
+	if herr != nil {
+		t.Fatalf("MatchScripts: %v", herr)
 	}
 	if !hits[0] || !hits[1] || hits[2] {
 		t.Fatalf("hits = %v, want {true true false}", hits)

@@ -33,8 +33,8 @@ const maxSpread = 0.10
 func Seed(db *storage.Store) error {
 	var history, err = parseCSV(bytes.NewReader(assets.RatesCSV))
 	if err != nil { return fmt.Errorf("parse embedded rates: %w", err) }
-	seeded, err := db.SeedRates(history)
-	if err != nil { return fmt.Errorf("seed rates: %w", err) }
+	var seeded, serr = db.SeedRates(history)
+	if serr != nil { return fmt.Errorf("seed rates: %w", serr) }
 	if seeded {
 		log.Printf("rates: seeded %d historical rates", len(history))
 	}
@@ -106,10 +106,10 @@ func refresh(ctx context.Context, db *storage.Store, now time.Time) (storage.Rat
 	if err == nil && now.Sub(time.Unix(latest.Time, 0)) < maxAge {
 		return storage.Rate{}, false
 	}
-	cents, err := fetchRate(ctx)
-	if err != nil {
+	var cents, centsErr = fetchRate(ctx)
+	if centsErr != nil {
 		if ctx.Err() == nil {
-			log.Printf("rates: %v", err)
+			log.Printf("rates: %v", centsErr)
 		}
 		return storage.Rate{}, false
 	}

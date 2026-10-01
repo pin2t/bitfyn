@@ -150,10 +150,10 @@ func (w *Wallet) SignSpend(s Spend, dest, change []byte) (*wire.MsgTx, error) {
 		var c = coins[in.PreviousOutPoint]
 		var key, err = w.keyForPath(c.Path)
 		if err != nil { return nil, fmt.Errorf("key for %s: %w", c.Address, err) }
-		priv, err := key.ECPrivKey()
-		if err != nil { return nil, fmt.Errorf("private key for %s: %w", c.Address, err) }
-		witness, err := txscript.WitnessSignature(tx, hashes, i, c.Value, c.PkScript, txscript.SigHashAll, priv, true)
-		if err != nil { return nil, fmt.Errorf("sign input %d: %w", i, err) }
+		var priv, perr = key.ECPrivKey()
+		if perr != nil { return nil, fmt.Errorf("private key for %s: %w", c.Address, perr) }
+		var witness, werr = txscript.WitnessSignature(tx, hashes, i, c.Value, c.PkScript, txscript.SigHashAll, priv, true)
+		if werr != nil { return nil, fmt.Errorf("sign input %d: %w", i, werr) }
 		in.Witness = witness
 	}
 	return tx, nil

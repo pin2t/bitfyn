@@ -61,10 +61,10 @@ func (g *gui) nextChange() (changeAddress, error) {
 		return changeAddress{index: a.Index, address: a.Address, path: a.Path, pubkey: a.Pubkey, script: script, stored: true}, nil
 	}
 	var index = uint32(len(stored))
-	address, path, pubkey, err := g.wallet.DeriveChangeAddress(index)
-	if err != nil { return changeAddress{}, err }
-	script, err := g.wallet.AddressScript(address)
-	if err != nil { return changeAddress{}, err }
+	var address, path, pubkey, aerr = g.wallet.DeriveChangeAddress(index)
+	if aerr != nil { return changeAddress{}, aerr }
+	var script, serr = g.wallet.AddressScript(address)
+	if serr != nil { return changeAddress{}, serr }
 	return changeAddress{index: index, address: address, path: path, pubkey: pubkey, script: script}, nil
 }
 
@@ -78,18 +78,18 @@ func (g *gui) planSend(r sendRequest) (plannedSend, error) {
 	if r.amount <= 0 {
 		return plannedSend{}, errors.New("enter an amount")
 	}
-	change, err := g.nextChange()
-	if err != nil { return plannedSend{}, err }
+	var change, cerr = g.nextChange()
+	if cerr != nil { return plannedSend{}, cerr }
 	var coins = r.coins
 	var useAll = len(coins) > 0
 	if !useAll {
 		coins = sync.Coins()
 	}
-	spend, err := wallet.PlanSpend(coins, useAll, dest, r.amount, r.feeRate, change.script)
-	if errors.Is(err, wallet.ErrInsufficientFunds) && useAll {
-		err = errors.New("the selected coins do not cover the amount and the fee")
+	var spend, serr = wallet.PlanSpend(coins, useAll, dest, r.amount, r.feeRate, change.script)
+	if errors.Is(serr, wallet.ErrInsufficientFunds) && useAll {
+		serr = errors.New("the selected coins do not cover the amount and the fee")
 	}
-	if err != nil { return plannedSend{}, err }
+	if serr != nil { return plannedSend{}, serr }
 	return plannedSend{address: strings.TrimSpace(r.address), dest: dest, spend: spend, feeRate: r.feeRate, change: change}, nil
 }
 
@@ -107,8 +107,8 @@ func (g *gui) sendPlanned(p plannedSend) (chainhash.Hash, int, error) {
 	}
 	var tx, err = g.wallet.SignSpend(p.spend, p.dest, p.change.script)
 	if err != nil { return chainhash.Hash{}, 0, err }
-	peers, err := sync.Broadcast(tx)
-	if err != nil { return chainhash.Hash{}, 0, err }
+	var peers, perr = sync.Broadcast(tx)
+	if perr != nil { return chainhash.Hash{}, 0, perr }
 	return tx.TxHash(), peers, nil
 }
 
@@ -195,8 +195,8 @@ func (g *gui) newSendForm() *sendForm {
 func (f *sendForm) request() (sendRequest, error) {
 	var amount, err = parseAmount(f.amount.Text, f.unit.Selected)
 	if err != nil { return sendRequest{}, err }
-	rate, err := strconv.ParseInt(strings.TrimSpace(f.feeRate.Text), 10, 64)
-	if err != nil || rate < 1 {
+	var rate, rerr = strconv.ParseInt(strings.TrimSpace(f.feeRate.Text), 10, 64)
+	if rerr != nil || rate < 1 {
 		return sendRequest{}, errors.New("enter a fee rate of at least 1 sat/vB")
 	}
 	var chosen []wallet.Coin

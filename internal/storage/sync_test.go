@@ -24,9 +24,9 @@ func TestSyncTables(t *testing.T) {
 	if n, err := s.HeaderCount(); err != nil || n != 3 {
 		t.Fatalf("HeaderCount = %d, %v; want 3", n, err)
 	}
-	got, ok, err := s.HeaderAt(1)
-	if err != nil || !ok || got.Hash != h1.Hash || got.PrevHash != h0.Hash {
-		t.Fatalf("HeaderAt(1) = %+v, %v, %v", got, ok, err)
+	var got, ok, gotErr = s.HeaderAt(1)
+	if gotErr != nil || !ok || got.Hash != h1.Hash || got.PrevHash != h0.Hash {
+		t.Fatalf("HeaderAt(1) = %+v, %v, %v", got, ok, gotErr)
 	}
 	if err := s.DeleteHeadersFrom(0); err != nil {
 		t.Fatalf("DeleteHeadersFrom: %v", err)
@@ -38,9 +38,9 @@ func TestSyncTables(t *testing.T) {
 	if err := s.SaveFilter(f0); err != nil {
 		t.Fatalf("SaveFilter: %v", err)
 	}
-	header, ok, err := s.FilterHeaderAt(0)
-	if err != nil || !ok || header != f0.FilterHeader {
-		t.Fatalf("FilterHeaderAt(0) = %s, %v, %v", header, ok, err)
+	var header, hok, herr = s.FilterHeaderAt(0)
+	if herr != nil || !hok || header != f0.FilterHeader {
+		t.Fatalf("FilterHeaderAt(0) = %s, %v, %v", header, hok, herr)
 	}
 	if n, err := s.FilterCount(); err != nil || n != 1 {
 		t.Fatalf("FilterCount = %d, %v; want 1", n, err)
@@ -77,16 +77,16 @@ func TestSyncTables(t *testing.T) {
 	if err := s.SaveMatch(m); err != nil {
 		t.Fatalf("SaveMatch again: %v", err)
 	}
-	matches, err := s.Matches()
-	if err != nil || len(matches) != 1 || matches[0].Address != "bc1qtest" {
-		t.Fatalf("Matches = %+v, %v", matches, err)
+	var matches, merr = s.Matches()
+	if merr != nil || len(matches) != 1 || matches[0].Address != "bc1qtest" {
+		t.Fatalf("Matches = %+v, %v", matches, merr)
 	}
 	if err := s.AddAddress(0, "m/84'/1'/0'/0/0", "tb1qtest", []byte{7, 8, 9}); err != nil {
 		t.Fatalf("AddAddress: %v", err)
 	}
-	addrs, err := s.Addresses()
-	if err != nil || len(addrs) != 1 || addrs[0].Pubkey[2] != 9 {
-		t.Fatalf("Addresses = %+v, %v", addrs, err)
+	var addrs, aerr = s.Addresses()
+	if aerr != nil || len(addrs) != 1 || addrs[0].Pubkey[2] != 9 {
+		t.Fatalf("Addresses = %+v, %v", addrs, aerr)
 	}
 	if err := s.SavePeer("10.0.0.1", 8333); err != nil {
 		t.Fatalf("SavePeer: %v", err)
@@ -109,9 +109,9 @@ func TestSyncTables(t *testing.T) {
 	if err := s.UpdatePeerServices("10.0.0.1", 8333, 0x40040); err != nil {
 		t.Fatalf("UpdatePeerServices: %v", err)
 	}
-	peers, err := s.Peers()
-	if err != nil || len(peers) != 1 {
-		t.Fatalf("Peers = %+v, %v", peers, err)
+	var peers, perr = s.Peers()
+	if perr != nil || len(peers) != 1 {
+		t.Fatalf("Peers = %+v, %v", peers, perr)
 	}
 	var p = peers[0]
 	if p.Host != "10.0.0.1" || p.Port != 8333 || p.Services != 0x40040 || p.LatencyMs != 500 || p.OkCount != 2 || p.FailCount != 1 {
@@ -150,9 +150,9 @@ func TestAddPeerColumns(t *testing.T) {
 	if err := s.RecordPeerResult("10.0.0.2", 18333, true, 42); err != nil {
 		t.Fatalf("RecordPeerResult on migrated table: %v", err)
 	}
-	peers, err := s.Peers()
-	if err != nil || len(peers) != 1 || peers[0].OkCount != 1 || peers[0].LatencyMs != 42 {
-		t.Fatalf("Peers after migration = %+v, %v", peers, err)
+	var peers, peersErr = s.Peers()
+	if peersErr != nil || len(peers) != 1 || peers[0].OkCount != 1 || peers[0].LatencyMs != 42 {
+		t.Fatalf("Peers after migration = %+v, %v", peers, peersErr)
 	}
 }
 

@@ -92,8 +92,8 @@ type gui struct {
 func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	var net, err = wallet.ParamsForNetwork(opts.Network)
 	if err != nil { return nil, err }
-	store, err := storage.Open(filepath.Join(opts.DataDir, "bitfyn.db"), opts.DBPass)
-	if err != nil { return nil, err }
+	var store, serr = storage.Open(filepath.Join(opts.DataDir, "bitfyn.db"), opts.DBPass)
+	if serr != nil { return nil, serr }
 	var fail = func(err error) (*gui, error) {
 		_ = store.Close()
 		return nil, err
@@ -105,25 +105,25 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	if rerr != nil && !errors.Is(rerr, storage.ErrNoRate) {
 		log.Printf("rates: read latest rate: %v", rerr)
 	}
-	meta, err := store.Meta()
+	var meta, merr = store.Meta()
 	var wl *wallet.Wallet
 	switch {
-	case errors.Is(err, storage.ErrNoWallet):
+	case errors.Is(merr, storage.ErrNoWallet):
 		var mnemonic, err = wallet.NewMnemonic(128)
 		if err != nil {
 			return fail(fmt.Errorf("generate mnemonic: %w", err))
 		}
 		wl, err = wallet.New(mnemonic, "", net)
 		if err != nil { return fail(err) }
-		xpub, err := wl.AccountXPub()
-		if err != nil { return fail(err) }
+		var xpub, xerr = wl.AccountXPub()
+		if xerr != nil { return fail(xerr) }
 		if err := store.SaveMeta(mnemonic, xpub, opts.Network, time.Now().Unix()); err != nil {
 			return fail(fmt.Errorf("save wallet: %w", err))
 		}
 		meta, err = store.Meta()
 		if err != nil { return fail(err) }
-	case err != nil:
-		return fail(err)
+	case merr != nil:
+		return fail(merr)
 	default:
 		if meta.Network != opts.Network {
 			return fail(fmt.Errorf("wallet database is for network %q, not %q", meta.Network, opts.Network))

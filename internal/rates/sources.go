@@ -65,21 +65,21 @@ func fetchRate(ctx context.Context) (int64, error) {
 
 // fetchSource gets the price quoted by one source in US cents.
 func fetchSource(ctx context.Context, s source) (int64, error) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	var fetchCtx, cancel = context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
-	var req, err = http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
+	var req, err = http.NewRequestWithContext(fetchCtx, http.MethodGet, s.url, nil)
 	if err != nil { return 0, err }
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil { return 0, err }
+	var resp, rerr = http.DefaultClient.Do(req)
+	if rerr != nil { return 0, rerr }
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil { return 0, err }
-	price, err := s.parse(body)
-	if err != nil { return 0, err }
+	var body, berr = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if berr != nil { return 0, berr }
+	var price, perr = s.parse(body)
+	if perr != nil { return 0, perr }
 	return toCents(price)
 }
 

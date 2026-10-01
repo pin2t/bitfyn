@@ -94,10 +94,10 @@ func (s *Store) SaveHeaders(headers []Header) error {
 	var tx, err = s.db.Begin()
 	if err != nil { return err }
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(
+	var stmt, serr = tx.Prepare(
 		`insert or replace into headers (height, hash, prevHash, merkleRoot, version, timestamp, bits, nonce)
 		 values (?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil { return err }
+	if serr != nil { return serr }
 	defer stmt.Close()
 	for _, h := range headers {
 		if _, err := stmt.Exec(h.Height, h.Hash[:], h.PrevHash[:], h.MerkleRoot[:], h.Version, h.Timestamp, h.Bits, h.Nonce); err != nil {
@@ -188,8 +188,8 @@ func (s *Store) SaveFilters(filters []Filter) error {
 	var tx, err = s.db.Begin()
 	if err != nil { return err }
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`insert or replace into cfilters (height, blockHash, filterHeader, filterData) values (?, ?, ?, ?)`)
-	if err != nil { return err }
+	var stmt, stmtErr = tx.Prepare(`insert or replace into cfilters (height, blockHash, filterHeader, filterData) values (?, ?, ?, ?)`)
+	if stmtErr != nil { return stmtErr }
 	defer stmt.Close()
 	for _, f := range filters {
 		if _, err := stmt.Exec(f.Height, f.BlockHash[:], f.FilterHeader[:], f.Data); err != nil {

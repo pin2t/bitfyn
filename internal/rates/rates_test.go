@@ -68,9 +68,9 @@ func TestParsers(t *testing.T) {
 	for _, c := range cases {
 		var price, err = c.parse([]byte(c.body))
 		if err != nil { t.Fatalf("parse %s: %v", c.body, err) }
-		cents, err := toCents(price)
-		if err != nil || cents != c.want {
-			t.Errorf("parse %s = %d, %v; want %d", c.body, cents, err, c.want)
+		var cents, cerr = toCents(price)
+		if cerr != nil || cents != c.want {
+			t.Errorf("parse %s = %d, %v; want %d", c.body, cents, cerr, c.want)
 		}
 	}
 	if _, err := parseKraken([]byte(`{"error":["EQuery:Unknown asset pair"]}`)); err == nil {

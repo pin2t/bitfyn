@@ -67,10 +67,10 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 		DisableStallHandler: true,
 		Listeners:           listeners,
 	}
-	p, err := peer.NewOutboundPeer(cfg, address)
-	if err != nil {
+	var p, perr = peer.NewOutboundPeer(cfg, address)
+	if perr != nil {
 		conn.Close()
-		return nil, 0, fmt.Errorf("create peer: %w", err)
+		return nil, 0, fmt.Errorf("create peer: %w", perr)
 	}
 	p.AssociateConnection(conn)
 	var deadline = time.Now().Add(HandshakeTimeout)

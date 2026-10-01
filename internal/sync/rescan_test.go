@@ -36,9 +36,9 @@ func chainFilter(t *testing.T, height int32, entries ...[]byte) []byte {
 	if err != nil {
 		t.Fatalf("build filter: %v", err)
 	}
-	data, err := filter.NBytes()
-	if err != nil {
-		t.Fatalf("serialize filter: %v", err)
+	var data, derr = filter.NBytes()
+	if derr != nil {
+		t.Fatalf("serialize filter: %v", derr)
 	}
 	return data
 }

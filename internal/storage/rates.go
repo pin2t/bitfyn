@@ -24,8 +24,8 @@ func (s *Store) SeedRates(rates []Rate) (bool, error) {
 		return false, err
 	}
 	if exists { return false, nil }
-	stmt, err := tx.Prepare(`insert or replace into rates (ts, cents) values (?, ?)`)
-	if err != nil { return false, err }
+	var stmt, serr = tx.Prepare(`insert or replace into rates (ts, cents) values (?, ?)`)
+	if serr != nil { return false, serr }
 	defer stmt.Close()
 	for _, r := range rates {
 		if _, err := stmt.Exec(r.Time, r.Cents); err != nil { return false, err }
