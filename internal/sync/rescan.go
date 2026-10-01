@@ -38,9 +38,9 @@ func rescan() error {
 	if len(jobs) == 0 {
 		return nil
 	}
-	resume, err := store.FilterResumeHeight(filterStart)
-	if err != nil {
-		return fmt.Errorf("filter resume height: %w", err)
+	var resume, rerr = store.FilterResumeHeight(filterStart)
+	if rerr != nil {
+		return fmt.Errorf("filter resume height: %w", rerr)
 	}
 	var end = resume - 1
 	var targets, idle = rescanTargets(jobs, end)
@@ -52,9 +52,9 @@ func rescan() error {
 	if len(targets) == 0 {
 		return nil
 	}
-	matched, err := matchedSet()
-	if err != nil {
-		return err
+	var matched, merr = matchedSet()
+	if merr != nil {
+		return merr
 	}
 	var start = targets[0].from
 	log.Printf("sync: rescanning blocks %d-%d for %d addresses watched after they were paid", start, end, len(targets))
@@ -156,13 +156,13 @@ func rescanBlock(height int32, data []byte, targets []rescanTarget, matched map[
 	for _, w := range fresh {
 		log.Printf("match: rescanned filter of block %d (%s) matches address %s", height, hdr.Hash, w.address)
 	}
-	block, err := getBlock(height)
-	if err != nil {
-		return fmt.Errorf("download matched block %d: %w", height, err)
+	var block, berr = getBlock(height)
+	if berr != nil {
+		return fmt.Errorf("download matched block %d: %w", height, berr)
 	}
-	n, err := processBlock(height, block)
-	if err != nil {
-		return err
+	var n, nerr = processBlock(height, block)
+	if nerr != nil {
+		return nerr
 	}
 	if n == 0 {
 		log.Printf("match: block %d holds no wallet transaction (filter false positive)", height)

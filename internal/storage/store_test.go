@@ -20,9 +20,9 @@ func TestPlainLifecycle(t *testing.T) {
 	if err := s.SaveMeta("abandon ", "xpub-test", "testnet", 1234); err != nil {
 		t.Fatalf("SaveMeta: %v", err)
 	}
-	meta, err := s.Meta()
-	if err != nil {
-		t.Fatalf("Meta: %v", err)
+	var meta, merr = s.Meta()
+	if merr != nil {
+		t.Fatalf("Meta: %v", merr)
 	}
 	if meta.Network != "testnet" || meta.XPub != "xpub-test" || meta.CreatedAt != 1234 || meta.NextIndex != 0 {
 		t.Errorf("unexpected meta: %+v", meta)
@@ -30,9 +30,9 @@ func TestPlainLifecycle(t *testing.T) {
 	if err := s.AddAddress(0, "m/84'/1'/0'/0/0", "tb1qtest", []byte{1, 2, 3}); err != nil {
 		t.Fatalf("AddAddress: %v", err)
 	}
-	n, err := s.CountAddresses()
-	if err != nil || n != 1 {
-		t.Fatalf("CountAddresses = %d, %v; want 1", n, err)
+	var n, nerr = s.CountAddresses()
+	if nerr != nil || n != 1 {
+		t.Fatalf("CountAddresses = %d, %v; want 1", n, nerr)
 	}
 	if err := s.AddAddress(0, "m/84'/1'/0'/0/0", "tb1qtest", []byte{1, 2, 3}); err != nil {
 		t.Fatalf("AddAddress again: %v", err)
@@ -41,14 +41,14 @@ func TestPlainLifecycle(t *testing.T) {
 		t.Fatalf("UpdateNextIndex: %v", err)
 	}
 	s.Close()
-	s2, err := Open(path, "")
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
+	var s2, serr = Open(path, "")
+	if serr != nil {
+		t.Fatalf("reopen: %v", serr)
 	}
 	defer s2.Close()
-	meta2, err := s2.Meta()
-	if err != nil {
-		t.Fatalf("Meta after reopen: %v", err)
+	var meta2, m2err = s2.Meta()
+	if m2err != nil {
+		t.Fatalf("Meta after reopen: %v", m2err)
 	}
 	if meta2.NextIndex != 1 || meta2.Mnemonic != "abandon " {
 		t.Errorf("unexpected meta after reopen: %+v", meta2)
@@ -69,20 +69,20 @@ func TestEncryptedLifecycle(t *testing.T) {
 		t.Fatalf("SaveMeta: %v", err)
 	}
 	s.Close()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+	var raw, rerr = os.ReadFile(path)
+	if rerr != nil {
+		t.Fatalf("ReadFile: %v", rerr)
 	}
 	if len(raw) >= 16 && string(raw[:16]) == "SQLite format 3\x00" {
 		t.Fatal("database file is not encrypted")
 	}
-	s2, err := Open(path, pass)
-	if err != nil {
-		t.Fatalf("reopen with passphrase: %v", err)
+	var s2, s2err = Open(path, pass)
+	if s2err != nil {
+		t.Fatalf("reopen with passphrase: %v", s2err)
 	}
-	meta, err := s2.Meta()
-	if err != nil {
-		t.Fatalf("Meta: %v", err)
+	var meta, metaErr = s2.Meta()
+	if metaErr != nil {
+		t.Fatalf("Meta: %v", metaErr)
 	}
 	if meta.Mnemonic != "secret words" {
 		t.Errorf("mnemonic = %q, want %q", meta.Mnemonic, "secret words")

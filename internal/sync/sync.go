@@ -91,13 +91,13 @@ func Init(network *chaincfg.Params, db *storage.Store) error {
 			return fmt.Errorf("load headers: %w", err)
 		}
 	}
-	addresses, err := store.Addresses()
-	if err != nil {
-		return fmt.Errorf("load addresses: %w", err)
+	var addresses, aerr = store.Addresses()
+	if aerr != nil {
+		return fmt.Errorf("load addresses: %w", aerr)
 	}
-	change, err := store.ChangeAddresses()
-	if err != nil {
-		return fmt.Errorf("load change addresses: %w", err)
+	var change, cerr = store.ChangeAddresses()
+	if cerr != nil {
+		return fmt.Errorf("load change addresses: %w", cerr)
 	}
 	scripts = make([]watchScript, 0, len(addresses)+len(change))
 	scriptIndex = make(map[string]int, len(addresses)+len(change))

@@ -75,27 +75,27 @@ func defaultDataDir() string {
 func openWallet(dataDir, network, dbPass string) (*storage.Store, *wallet.Wallet, error) {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return nil, nil, err }
-	store, err := storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
-	if err != nil { return nil, nil, err }
+	var store, serr = storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
+	if serr != nil { return nil, nil, serr }
 	var fail = func(err error) (*storage.Store, *wallet.Wallet, error) {
 		_ = store.Close()
 		return nil, nil, err
 	}
-	meta, err := store.Meta()
+	var meta, merr = store.Meta()
 	var w *wallet.Wallet
 	switch {
-	case errors.Is(err, storage.ErrNoWallet):
+	case errors.Is(merr, storage.ErrNoWallet):
 		var mnemonic, err = wallet.NewMnemonic(128)
 		if err != nil { return fail(err) }
 		w, err = wallet.New(mnemonic, "", net)
 		if err != nil { return fail(err) }
-		xpub, err := w.AccountXPub()
-		if err != nil { return fail(err) }
+		var xpub, xerr = w.AccountXPub()
+		if xerr != nil { return fail(xerr) }
 		if err := store.SaveMeta(mnemonic, xpub, network, time.Now().Unix()); err != nil {
 			return fail(err)
 		}
-	case err != nil:
-		return fail(err)
+	case merr != nil:
+		return fail(merr)
 	default:
 		if meta.Network != network {
 			return fail(fmt.Errorf("wallet database is for network %q, requested %q", meta.Network, network))
@@ -112,10 +112,10 @@ func runCheck(dataDir, network, dbPass string) error {
 	var store, w, err = openWallet(dataDir, network, dbPass)
 	if err != nil { return err }
 	defer store.Close()
-	meta, err := store.Meta()
-	if err != nil { return err }
-	addr, path, pub, err := w.DeriveAddress(meta.NextIndex)
-	if err != nil { return err }
+	var meta, metaErr = store.Meta()
+	if metaErr != nil { return metaErr }
+	var addr, path, pub, aerr = w.DeriveAddress(meta.NextIndex)
+	if aerr != nil { return aerr }
 	if err := store.AddAddress(meta.NextIndex, path, addr, pub); err != nil {
 		return err
 	}

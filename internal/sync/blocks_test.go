@@ -50,9 +50,9 @@ func testFilter(t *testing.T, block *wire.MsgBlock, entries [][]byte) []byte {
 	if err != nil {
 		t.Fatalf("build filter: %v", err)
 	}
-	data, err := filter.NBytes()
-	if err != nil {
-		t.Fatalf("serialize filter: %v", err)
+	var data, derr = filter.NBytes()
+	if derr != nil {
+		t.Fatalf("serialize filter: %v", derr)
 	}
 	return data
 }
@@ -97,9 +97,9 @@ func TestFilterHasOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildBasicFilter: %v", err)
 	}
-	fullData, err := full.NBytes()
-	if err != nil {
-		t.Fatalf("NBytes: %v", err)
+	var fullData, ferr = full.NBytes()
+	if ferr != nil {
+		t.Fatalf("NBytes: %v", ferr)
 	}
 	if ok, err := filterHasOutputs(fullData, &hash, block); err != nil || !ok {
 		t.Fatalf("basic filter rejected: %v, %v", ok, err)

@@ -16,9 +16,9 @@ func testCoin(t *testing.T, w *Wallet, chain, index uint32, value int64, confirm
 	if err != nil {
 		t.Fatalf("derive: %v", err)
 	}
-	script, err := w.AddressScript(addr)
-	if err != nil {
-		t.Fatalf("AddressScript: %v", err)
+	var script, serr = w.AddressScript(addr)
+	if serr != nil {
+		t.Fatalf("AddressScript: %v", serr)
 	}
 	return Coin{
 		OutPoint:  wire.OutPoint{Hash: chainhash.Hash{byte(chain), byte(index), byte(value)}, Index: index},
@@ -70,9 +70,9 @@ func TestSignSpend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSpend: %v", err)
 	}
-	tx, err := w.SignSpend(spend, dest, change)
-	if err != nil {
-		t.Fatalf("SignSpend: %v", err)
+	var tx, terr = w.SignSpend(spend, dest, change)
+	if terr != nil {
+		t.Fatalf("SignSpend: %v", terr)
 	}
 	var prevOuts = make(map[wire.OutPoint]*wire.TxOut)
 	for _, c := range coins {

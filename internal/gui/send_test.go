@@ -52,9 +52,9 @@ func TestNextChange(t *testing.T) {
 	if err := g.store.AddChangeAddress(first.index, first.path, first.address, first.pubkey); err != nil {
 		t.Fatalf("AddChangeAddress: %v", err)
 	}
-	again, err := g.nextChange()
-	if err != nil || !again.stored || again.address != first.address {
-		t.Fatalf("stored unused change = %+v, %v; want %s reused", again, err, first.address)
+	var again, aerr = g.nextChange()
+	if aerr != nil || !again.stored || again.address != first.address {
+		t.Fatalf("stored unused change = %+v, %v; want %s reused", again, aerr, first.address)
 	}
 }
 

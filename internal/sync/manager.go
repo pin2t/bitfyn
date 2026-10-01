@@ -449,10 +449,10 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 	var c, err = newConn(addr)
 	if err != nil { return false }
 	c.pinned = pinned
-	handshake, err := c.dial(ctx, true)
-	if err != nil {
+	var handshake, herr = c.dial(ctx, true)
+	if herr != nil {
 		if ctx.Err() != nil { return false }
-		log.Printf("peer %s: connect failed: %v", addr, err)
+		log.Printf("peer %s: connect failed: %v", addr, herr)
 		if rerr := store.RecordPeerResult(c.host, c.port, false, 0); rerr != nil {
 			log.Printf("record peer %s: %v", addr, rerr)
 		}
@@ -581,9 +581,9 @@ func syncOnce(c *conn) error {
 			log.Printf("sync: no peer answered the filter header anchor request; the filter peers will be trusted")
 		}
 	}
-	n, err := syncFilters()
-	if err != nil {
-		return fmt.Errorf("filters: %w", err)
+	var n, nerr = syncFilters()
+	if nerr != nil {
+		return fmt.Errorf("filters: %w", nerr)
 	}
 	if err := rescan(); err != nil {
 		return fmt.Errorf("rescan: %w", err)

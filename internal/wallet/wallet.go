@@ -31,9 +31,9 @@ func NewMnemonic(bits int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("generate entropy: %w", err)
 	}
-	mnemonic, err := bip39.NewMnemonic(entropy)
-	if err != nil {
-		return "", fmt.Errorf("encode mnemonic: %w", err)
+	var mnemonic, merr = bip39.NewMnemonic(entropy)
+	if merr != nil {
+		return "", fmt.Errorf("encode mnemonic: %w", merr)
 	}
 	return mnemonic, nil
 }
@@ -71,10 +71,10 @@ func (w *Wallet) Net() *chaincfg.Params { return w.net }
 func (w *Wallet) AccountXPub() (string, error) {
 	var key, err = w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0)})
 	if err != nil { return "", err }
-	neutered, err := key.Neuter()
-	if err != nil { return "", fmt.Errorf("neuter account key: %w", err) }
-	xpub, err := toSLIP132(neutered.String())
-	if err != nil { return "", err }
+	var neutered, nerr = key.Neuter()
+	if nerr != nil { return "", fmt.Errorf("neuter account key: %w", nerr) }
+	var xpub, xerr = toSLIP132(neutered.String())
+	if xerr != nil { return "", xerr }
 	return xpub, nil
 }
 
@@ -98,17 +98,17 @@ func (w *Wallet) DeriveChangeAddress(index uint32) (address, path string, pubkey
 
 func (w *Wallet) deriveOn(chain, index uint32) (address, path string, pubkey []byte, err error) {
 	path = fmt.Sprintf("m/%d'/%d'/%d'/%d/%d", Purpose, w.coin, 0, chain, index)
-	key, err := w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0), chain, index})
-	if err != nil { return "", "", nil, err }
-	pub, err := key.ECPubKey()
-	if err != nil {
-		return "", "", nil, fmt.Errorf("public key: %w", err)
+	var key, kerr = w.derivePath([]uint32{harden(Purpose), harden(w.coin), harden(0), chain, index})
+	if kerr != nil { return "", "", nil, kerr }
+	var pub, perr = key.ECPubKey()
+	if perr != nil {
+		return "", "", nil, fmt.Errorf("public key: %w", perr)
 	}
 	pubkey = pub.SerializeCompressed()
 	var hash = btcutil.Hash160(pubkey)
-	addr, err := btcutil.NewAddressWitnessPubKeyHash(hash, w.net)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("encode address: %w", err)
+	var addr, aerr = btcutil.NewAddressWitnessPubKeyHash(hash, w.net)
+	if aerr != nil {
+		return "", "", nil, fmt.Errorf("encode address: %w", aerr)
 	}
 	return addr.String(), path, pubkey, nil
 }

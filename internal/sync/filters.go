@@ -282,9 +282,9 @@ func storeFilters(fStart, count int32, pick func(i int32) ([]byte, *wire.MsgBloc
 			failed = err
 			break
 		}
-		row, err := applyFilter(fStart+i, data, block, prev)
-		if err != nil {
-			failed = err
+		var row, rowErr = applyFilter(fStart+i, data, block, prev)
+		if rowErr != nil {
+			failed = rowErr
 			break
 		}
 		rows = append(rows, row)
