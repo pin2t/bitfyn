@@ -58,31 +58,41 @@ func TestFanOutPinnedFailure(t *testing.T) {
 	if len(peers) != 1 || peers[0] != other {
 		t.Fatalf("answered peers = %v", peers)
 	}
-	var saved = pinnedAddr
+	var saved, savedSeen = pinnedAddr, pinnedSeen
 	pinnedAddr = pinnedPeer.addr
-	defer func() { pinnedAddr = saved }()
+	pinnedSeen = time.Now()
+	defer func() { pinnedAddr, pinnedSeen = saved, savedSeen }()
 	if err := requirePrimary(peers); err == nil {
 		t.Fatal("missing pinned peer not reported")
 	}
+	pinnedSeen = time.Now().Add(-pinnedFallbackAfter)
+	if err := requirePrimary(peers); err != nil {
+		t.Fatalf("pinned peer away long enough but required: %v", err)
+	}
+	pinnedSeen = time.Now()
 	if err := requirePrimary([]*conn{pinnedPeer, other}); err != nil {
 		t.Fatalf("pinned peer present but reported: %v", err)
 	}
 }
 
 // TestPinnedOrdering checks that the pinned peer leads the peer order and is
-// the only primary allowed while it is set.
+// the only primary allowed while it is set, until it has been away for
+// pinnedFallbackAfter.
 func TestPinnedOrdering(t *testing.T) {
 	var a = testConn(t, "10.0.0.1:8333", false)
 	var b = testConn(t, "10.0.0.2:8333", false)
 	var pin = testConn(t, "10.0.0.3:8333", true)
 	var savedPool = pool
 	var savedPinned = pinnedAddr
+	var savedSeen = pinnedSeen
 	defer func() {
 		pool = savedPool
 		pinnedAddr = savedPinned
+		pinnedSeen = savedSeen
 	}()
 	pool = []*conn{a, pin, b}
 	pinnedAddr = pin.addr
+	pinnedSeen = time.Now()
 	if got := orderedPeers(); len(got) != 3 || got[0] != pin || got[1] != a || got[2] != b {
 		t.Fatalf("orderedPeers = %v", got)
 	}
@@ -93,6 +103,18 @@ func TestPinnedOrdering(t *testing.T) {
 	if primary() != nil || len(filterPeers()) != 0 {
 		t.Fatal("sync may run without the pinned peer")
 	}
+	if fallbackTimer() == nil {
+		t.Fatal("no timer for the fallback")
+	}
+	pinnedSeen = time.Now().Add(-pinnedFallbackAfter)
+	if primary() != a || len(filterPeers()) != 2 || fallbackTimer() != nil {
+		t.Fatal("sync does not fall back to the oldest peer once the pinned peer is away")
+	}
+	pool = []*conn{a, pin, b}
+	if primary() != pin {
+		t.Fatal("pinned peer is not the primary again once back")
+	}
+	pool = []*conn{a, b}
 	pinnedAddr = ""
 	if primary() != a {
 		t.Fatal("oldest peer is not the primary without pinning")

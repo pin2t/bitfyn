@@ -118,6 +118,7 @@ func (c *conn) listeners() peer.MessageListeners {
 				if iv.Type != wire.InvTypeBlock { continue }
 				if chain != nil && chain.HeightOf(iv.Hash) < 0 {
 					log.Printf("peer %s announced block %s", c.addr, iv.Hash)
+					blockAnnounced()
 				}
 				wakeSync()
 				return

@@ -34,6 +34,10 @@ const anchorDialers = 8
 const pinnedMaxBackoff = time.Minute
 const pinnedStableAfter = 30 * time.Second
 
+// pinnedFallbackAfter is how long the pinned peer may be away before the
+// sync falls back to the other peers until it is back.
+const pinnedFallbackAfter = 5 * time.Minute
+
 // retryDelay paces reconnect attempts and failed sync rounds.
 const retryDelay = 5 * time.Second
 
@@ -51,12 +55,14 @@ const StateFilters State = 2
 
 // Status is a snapshot of the sync for display: the number of connected
 // peers, the current activity, the block height that activity has reached,
-// and the wallet balance in satoshis: confirmed, and the change pending
-// unconfirmed transactions make to it.
+// whether the wallet is synced to the tip of the chain, and the wallet balance
+// in satoshis: confirmed, and the change pending unconfirmed transactions make
+// to it.
 type Status struct {
 	State   State
 	Peers   int
 	Height  int32
+	Synced  bool
 	Balance int64
 	Pending int64
 }
@@ -67,17 +73,14 @@ func (s Status) Bars() int {
 	return min(s.Peers, TargetPeers)
 }
 
-// String is the status line: not connected, connected, or the syncing stage
-// with its current block number.
+// String is the status line: not connected, connected once synced to the
+// tip, or syncing with the block number reached so far.
 func (s Status) String() string {
 	if s.Peers == 0 {
 		return "Not connected"
 	}
-	switch s.State {
-	case StateHeaders:
-		return fmt.Sprintf("Syncing headers: block %d", s.Height)
-	case StateFilters:
-		return fmt.Sprintf("Syncing filters: block %d", s.Height)
+	if !s.Synced {
+		return fmt.Sprintf("Syncing (%d)...", s.Height)
 	}
 	return "Connected"
 }
@@ -96,6 +99,10 @@ var cancelDials context.CancelFunc = func() {}
 var wake chan struct{}
 var poolChanged chan struct{}
 var pinnedAddr string
+var pinnedSeen time.Time
+var roundOK bool
+var announced int
+var syncedThrough int
 var candidates []string
 var candNext int
 var anchorTried bool
@@ -107,7 +114,8 @@ var anchorTried bool
 // goroutine. pinned is an optional host:port peer that is assumed to be
 // always available: it is never dropped or replaced, it is reconnected
 // whenever the connection is lost, and headers and filters are always synced
-// from it. The other peers only cross-check its filters.
+// from it while it is connected. The other peers cross-check its filters, and
+// take over the sync once it has been away for pinnedFallbackAfter.
 func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus func(Status)) error {
 	if pinned != "" {
 		if _, _, err := net.SplitHostPort(pinned); err != nil {
@@ -126,6 +134,10 @@ func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus 
 	wake = make(chan struct{}, 1)
 	poolChanged = make(chan struct{}, 1)
 	pinnedAddr = pinned
+	pinnedSeen = time.Now()
+	roundOK = false
+	announced = 0
+	syncedThrough = 0
 	candidates = nil
 	candNext = 0
 	anchorTried = false
@@ -165,13 +177,33 @@ func emit() {
 	defer emitMu.Unlock()
 	var confirmed, pending = walletBalance()
 	mu.Lock()
-	var status = Status{State: activity, Peers: len(pool), Height: height, Balance: confirmed, Pending: pending}
+	var status = Status{State: activity, Peers: len(pool), Height: height, Synced: syncedLocked(), Balance: confirmed, Pending: pending}
 	var cb = notify
 	var live = !stopped
 	mu.Unlock()
 	if cb != nil && live {
 		cb(status)
 	}
+}
+
+// syncedLocked, with mu held, says whether the wallet is synced to the tip:
+// idle after a successful round, no unknown block announced since that round
+// started, and no connected peer advertising a higher tip.
+func syncedLocked() bool {
+	if activity != StateIdle || !roundOK || announced != syncedThrough { return false }
+	for _, c := range pool {
+		if c.peer.LastBlock() > height { return false }
+	}
+	return true
+}
+
+// blockAnnounced notes that a peer announced a block not in the chain, so the
+// wallet is behind until the next successful round.
+func blockAnnounced() {
+	mu.Lock()
+	announced++
+	mu.Unlock()
+	emit()
 }
 
 // report records the sync activity and the height it reached.
@@ -381,10 +413,12 @@ func orderedPeers() []*conn {
 }
 
 // primary returns the connected peer that drives the sync. With a pinned
-// peer set, only the pinned peer qualifies: nil means waiting for it.
+// peer set, only the pinned peer qualifies, nil meaning waiting for it, until
+// it has been away for pinnedFallbackAfter: then the oldest other peer does.
 func primary() *conn {
 	if pinnedAddr != "" {
-		return pinnedConn()
+		if c := pinnedConn(); c != nil { return c }
+		if !pinnedAway() { return nil }
 	}
 	var peers = orderedPeers()
 	if len(peers) == 0 { return nil }
@@ -400,10 +434,32 @@ func filterPeers() []*conn {
 	return peers[:min(len(peers), TargetPeers)]
 }
 
+// pinnedAway says whether a pinned peer is set but has not been connected
+// for pinnedFallbackAfter, so the sync falls back to the other peers.
+func pinnedAway() bool {
+	if pinnedAddr == "" || pinnedConn() != nil { return false }
+	mu.Lock()
+	defer mu.Unlock()
+	return time.Since(pinnedSeen) >= pinnedFallbackAfter
+}
+
+// fallbackTimer fires when the sync falls back from the away pinned peer to
+// the others. It is nil, never firing, without a pinned peer or once the
+// fallback is due.
+func fallbackTimer() <-chan time.Time {
+	if pinnedAddr == "" { return nil }
+	mu.Lock()
+	var left = pinnedFallbackAfter - time.Since(pinnedSeen)
+	mu.Unlock()
+	if left <= 0 { return nil }
+	return time.After(left)
+}
+
 // requirePrimary fails when a pinned peer is set but is not among the peers
-// that answered a request: headers and filters are always synced from it.
+// that answered a request: headers and filters are synced from it unless it
+// is away and the sync fell back to the other peers.
 func requirePrimary(peers []*conn) error {
-	if pinnedAddr == "" || (len(peers) > 0 && peers[0].pinned) {
+	if pinnedAddr == "" || (len(peers) > 0 && peers[0].pinned) || pinnedAway() {
 		return nil
 	}
 	return fmt.Errorf("pinned peer %s did not answer", pinnedAddr)
@@ -503,6 +559,7 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 		<-c.quit
 		mu.Lock()
 		pool = slices.DeleteFunc(pool, func(other *conn) bool { return other == c })
+		if c.pinned { pinnedSeen = time.Now() }
 		var left = len(pool)
 		mu.Unlock()
 		log.Printf("%s %s disconnected (%d connected)", kind, addr, left)
@@ -514,10 +571,12 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 }
 
 // syncLoop syncs against one pool peer whenever a new block is announced, a
-// peer connects, or the poll interval elapses. A failing peer is disconnected
+// peer connects, the pinned peer has been away long enough to fall back to
+// the others, or the poll interval elapses. A failing peer is disconnected
 // so the next round uses another one.
 func syncLoop() {
 	defer wg.Done()
+	var fellBack = false
 	for {
 		select {
 		case <-stop:
@@ -530,10 +589,26 @@ func syncLoop() {
 			case <-stop:
 				return
 			case <-wake:
+			case <-fallbackTimer():
 			}
 			continue
 		}
+		if pinnedAddr != "" && c.pinned == fellBack {
+			fellBack = !c.pinned
+			if fellBack {
+				log.Printf("sync: pinned peer %s away for %s, syncing from %s", pinnedAddr, pinnedFallbackAfter, c.addr)
+			} else {
+				log.Printf("sync: pinned peer %s is back, syncing from it", pinnedAddr)
+			}
+		}
+		mu.Lock()
+		var seen = announced
+		mu.Unlock()
 		var err = syncOnce(c)
+		mu.Lock()
+		roundOK = err == nil
+		if roundOK { syncedThrough = seen }
+		mu.Unlock()
 		report(StateIdle, chain.Height())
 		if err != nil {
 			log.Printf("sync: round failed: %v", err)
