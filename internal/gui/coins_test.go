@@ -1,8 +1,10 @@
 package gui
 
+import "strings"
 import "testing"
 import "time"
 import "fyne.io/fyne/v2"
+import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/test"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
@@ -80,24 +82,33 @@ func TestSortCoins(t *testing.T) {
 	}
 }
 
-// cardLabels returns the texts of a card's time, address and amount labels,
-// and whether it shows the unconfirmed hourglass.
-func cardLabels(card fyne.CanvasObject) (string, string, string, bool) {
+// cardCells returns a card's time, address and amount cells, unwrapped from
+// the grey theme of an unconfirmed coin, and whether they were.
+func cardCells(card fyne.CanvasObject) ([]fyne.CanvasObject, bool) {
 	var row = card.(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*fyne.Container)
-	var when = row.Objects[0].(*widget.Label).Text
-	var address = row.Objects[1].(*fyne.Container).Objects[0].(*widget.Label).Text
-	var amount = row.Objects[2].(*fyne.Container).Objects
+	var cells = append([]fyne.CanvasObject(nil), row.Objects[1:]...)
 	var pending = false
-	for _, o := range amount {
-		if c, ok := o.(*fyne.Container); ok {
-			if icon, ok := c.Objects[0].(*tapIcon); ok && icon.icon.Resource == hourglassIcon { pending = true }
+	for i, cell := range cells {
+		if o, ok := cell.(*container.ThemeOverride); ok {
+			cells[i] = o.Content
+			pending = o.Theme == pendingTheme{}
 		}
 	}
+	return cells, pending
+}
+
+// cardLabels returns the texts of a card's time, address and amount labels,
+// and whether it is shown as unconfirmed.
+func cardLabels(card fyne.CanvasObject) (string, string, string, bool) {
+	var cells, pending = cardCells(card)
+	var when = cells[0].(*widget.Label).Text
+	var address = cells[1].(*fyne.Container).Objects[0].(*widget.Label).Text
+	var amount = cells[2].(*fyne.Container).Objects
 	return when, address, amount[len(amount)-1].(*widget.Label).Text, pending
 }
 
 // TestCoinsView checks the cards, newest first, with relative times, short
-// addresses and amounts, the hourglass on the unconfirmed coin only, sorting
+// addresses and amounts, the unconfirmed coin only in grey, sorting
 // from the header arrows, the copy icon, the empty state, times refreshed
 // without rebuilding, and the Send button.
 func TestCoinsView(t *testing.T) {
@@ -134,7 +145,7 @@ func TestCoinsView(t *testing.T) {
 	}
 	for i, c := range want {
 		var when, addr, amount, pending = cardLabels(v.list.Objects[i])
-		if when != c.when || addr != shortAddress(address) || amount != c.amount || pending != c.pending {
+		if when != c.when || !strings.HasSuffix(addr, address[len(address)-addressTail:]) || amount != c.amount || pending != c.pending {
 			t.Errorf("card %d = %q %q %q pending %v, want %q %q pending %v", i, when, addr, amount, pending, c.when, c.amount, c.pending)
 		}
 	}
@@ -154,8 +165,8 @@ func TestCoinsView(t *testing.T) {
 	if _, _, amount, _ := cardLabels(v.list.Objects[0]); amount != "250 000 sats" {
 		t.Fatalf("after sorting by time descending the first card is %q", amount)
 	}
-	var row = v.list.Objects[0].(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*fyne.Container)
-	var copyIcon = row.Objects[1].(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*tapIcon)
+	var cells, _ = cardCells(v.list.Objects[0])
+	var copyIcon = cells[1].(*fyne.Container).Objects[1].(*fyne.Container).Objects[0].(*tapIcon)
 	test.Tap(copyIcon)
 	if got := app.Clipboard().Content(); got != address {
 		t.Fatalf("clipboard %q, want the full address %q", got, address)
@@ -192,7 +203,7 @@ func TestCoinsHeaderAlignment(t *testing.T) {
 	g.coinsView.update(testCoins(now, g.addr.Text), now)
 	w.Resize(fyne.NewSize(700, 801))
 	var header = g.coinsView.content.Objects[0].(*fyne.Container).Objects[0].(*fyne.Container).Objects[0].(*fyne.Container)
-	var headerTime = header.Objects[0].(*fyne.Container).Objects[0]
+	var headerTime = header.Objects[1].(*fyne.Container).Objects[0]
 	var cardTime = g.coinsView.times[0]
 	var driver = app.Driver()
 	var hx = driver.AbsolutePositionForObject(headerTime).X
@@ -249,6 +260,10 @@ func TestCoinsLayout(t *testing.T) {
 		}
 		var list = v.content.Objects[1]
 		var listBottom = driver.AbsolutePositionForObject(list).Y + list.Size().Height
+		var mergeLeft, sendRight = merge.X - top.X, top.X + size.Width - send.X - v.send.Size().Width
+		if mergeLeft != cardPos.X-top.X || sendRight != top.X+size.Width-cardPos.X-card.Size().Width {
+			t.Errorf("%d coins: Merge %v from the left, Send %v from the right, want the cards' gaps", n, mergeLeft, sendRight)
+		}
 		if send.Y < listBottom || send.Y > listBottom+2*theme.Padding() {
 			t.Errorf("%d coins: Send at y %v, list ends at %v", n, send.Y, listBottom)
 		}
@@ -263,5 +278,142 @@ func TestCoinsLayout(t *testing.T) {
 	check(40)
 	if list := v.content.Objects[1].Size().Height; list >= v.list.MinSize().Height {
 		t.Errorf("long list %v high, not scrolling its cards' %v", list, v.list.MinSize().Height)
+	}
+}
+
+// TestCoinsSelection checks the check boxes: selecting cards one by one with
+// the header box going partly then fully checked, the header box selecting
+// and clearing all, the selection kept across sorting, and spent coins
+// leaving it.
+func TestCoinsSelection(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	var tabs = g.tabs(g.content())
+	w.SetContent(tabs)
+	tabs.SelectIndex(1)
+	var v = g.coinsView
+	if !v.selectAll.Disabled() {
+		t.Fatal("select all must be disabled without coins")
+	}
+	var now = time.Now()
+	var coins = testCoins(now, g.addr.Text)
+	v.update(coins, now)
+	if v.selectAll.Disabled() || v.selectAll.Checked || v.selectAll.Partial || len(v.selection()) != 0 {
+		t.Fatal("coins must start unselected")
+	}
+	test.Tap(v.checks[0])
+	if !v.selectAll.Partial || v.selectAll.Checked || len(v.selection()) != 1 || v.selection()[0].OutPoint != v.coins[0].OutPoint {
+		t.Fatalf("one of three selected: partial %v checked %v, %d selected", v.selectAll.Partial, v.selectAll.Checked, len(v.selection()))
+	}
+	test.Tap(v.checks[1])
+	test.Tap(v.checks[2])
+	if !v.selectAll.Checked || v.selectAll.Partial || len(v.selection()) != 3 {
+		t.Fatal("header box not checked with every coin selected")
+	}
+	test.Tap(v.selectAll)
+	if v.selectAll.Checked || len(v.selection()) != 0 || v.checks[0].Checked {
+		t.Fatal("header box did not clear the selection")
+	}
+	test.Tap(v.selectAll)
+	if len(v.selection()) != 3 || !v.checks[2].Checked {
+		t.Fatal("header box did not select every coin")
+	}
+	test.Tap(v.checks[1])
+	var kept = v.coins[0].OutPoint
+	test.Tap(v.amountSort.up)
+	if len(v.selection()) != 2 {
+		t.Fatalf("sorting changed the selection to %d coins", len(v.selection()))
+	}
+	for i, c := range v.coins {
+		var want = false
+		for _, s := range v.selection() {
+			if s.OutPoint == c.OutPoint { want = true }
+		}
+		if v.checks[i].Checked != want {
+			t.Fatalf("card %d check box %v, selected %v", i, v.checks[i].Checked, want)
+		}
+	}
+	var left []wallet.Coin
+	for _, c := range coins {
+		if c.OutPoint != kept { left = append(left, c) }
+	}
+	v.update(left, now)
+	if len(v.selection()) != 1 || !v.selectAll.Partial {
+		t.Fatalf("spent coin still selected: %d selected", len(v.selection()))
+	}
+}
+
+// TestFitAddress checks the address kept whole when it fits, else shortened
+// to the longest start that fits with its last characters, down to the
+// ellipsis and the last characters alone.
+func TestFitAddress(t *testing.T) {
+	const address = "bc1q0r80j388qfu32q67u6zjx3lhm9wsf07gryt4xl"
+	var cases = []struct {
+		room int
+		want string
+	}{
+		{100, address},
+		{len(address), address},
+		{20, "bc1q0r80j388q…ryt4xl"},
+		{12, "bc1q0…ryt4xl"},
+		{11, "…ryt4xl"},
+		{3, "…ryt4xl"},
+	}
+	for _, c := range cases {
+		var got = fitAddress(address, func(s string) bool { return len([]rune(s)) <= c.room })
+		if got != c.want {
+			t.Errorf("room %d: %q, want %q", c.room, got, c.want)
+		}
+	}
+}
+
+// TestCoinsAddressFit checks that at the window's width each card's address
+// and copy icon end before its amount, a card with a long amount showing less
+// of the address, and that the copy icon still copies the whole address.
+func TestCoinsAddressFit(t *testing.T) {
+	var app = test.NewApp()
+	defer app.Quit()
+	var w = test.NewWindow(nil)
+	defer w.Close()
+	var g, err = newGUI(Options{DataDir: t.TempDir(), Network: "regtest"}, w)
+	if err != nil {
+		t.Fatalf("newGUI: %v", err)
+	}
+	defer g.store.Close()
+	var tabs = g.tabs(g.content())
+	w.SetContent(tabs)
+	w.Resize(fyne.NewSize(600, 800))
+	tabs.SelectIndex(1)
+	var v = g.coinsView
+	var now = time.Now()
+	const address = "bc1q0r80j388qfu32q67u6zjx3lhm9wsf07gryt4xl"
+	var coins = testCoins(now, address)
+	coins[0].Value = 4_999_999
+	coins[1].Value = 1
+	v.update(coins, now)
+	w.Resize(fyne.NewSize(600, 801))
+	var driver = app.Driver()
+	var shown = map[string]string{}
+	for _, card := range v.list.Objects {
+		var cells, _ = cardCells(card)
+		var icon = cells[1].(*fyne.Container).Objects[1]
+		var amount = cells[2].(*fyne.Container).Objects[1].(*widget.Label)
+		var iconEnd = driver.AbsolutePositionForObject(icon).X + icon.Size().Width
+		if amountStart := driver.AbsolutePositionForObject(amount).X; iconEnd > amountStart {
+			t.Errorf("%s: copy icon ends at %v, after the amount starting at %v", amount.Text, iconEnd, amountStart)
+		}
+		var _, addr, _, _ = cardLabels(card)
+		shown[amount.Text] = addr
+	}
+	var long, short = shown["4 999 999 sats"], shown["1 sats"]
+	if !strings.HasSuffix(long, "ryt4xl") || len(long) >= len(short) {
+		t.Errorf("long amount shows %q, short amount %q", long, short)
 	}
 }
