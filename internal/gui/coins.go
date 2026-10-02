@@ -1,6 +1,7 @@
 package gui
 
 import "fmt"
+import "image/color"
 import "sort"
 import "strings"
 import "time"
@@ -12,16 +13,9 @@ import "fyne.io/fyne/v2/driver/desktop"
 import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
+import "github.com/btcsuite/btcd/wire"
 import "bitfyn/internal/sync"
 import "bitfyn/internal/wallet"
-
-// hourglassIcon marks a coin that is not confirmed yet, the Material Design
-// "hourglass_empty" icon like the theme's own icons, recoloured with the
-// theme.
-var hourglassIcon = theme.NewThemedResource(fyne.NewStaticResource("hourglass.svg", []byte(
-	`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">`+
-		`<path d="M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6z`+
-		`m10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z"/></svg>`)))
 
 // mergeIcon and splitIcon are the Material Design "call_merge" and
 // "call_split" icons, recoloured with the theme.
@@ -39,11 +33,10 @@ var arrowDown = fyne.NewStaticResource("sort-down.svg", []byte(
 	`<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8"><path d="M1 .5h10L6 7.5z"/></svg>`))
 
 // arrowWidth and arrowHeight size one sort triangle; copyIconSize sizes the
-// copy icon on the cards and hourglassSize the unconfirmed mark.
+// copy icon on the cards.
 const arrowWidth = 10
 const arrowHeight = 7
 const copyIconSize = 16
-const hourglassSize = 16
 
 // coinSort is a column the coin list is sorted by.
 type coinSort int
@@ -54,12 +47,16 @@ const sortByAmount coinSort = 1
 // coinsView is the Coins tab: a header naming the columns, with sort arrows
 // on Time and Amount, over a list of cards, one per spendable coin, followed
 // by the Merge, Split and Send buttons. A list taller than the window
-// scrolls, keeping the buttons in view.
+// scrolls, keeping the buttons in view. Each card has a check box to select
+// its coin, and the header one to select them all.
 type coinsView struct {
 	g          *gui
 	content    *fyne.Container
 	list       *fyne.Container
 	empty      *widget.Label
+	selectAll  *widget.Check
+	checks     []*widget.Check
+	selected   map[wire.OutPoint]bool
 	timeSort   *sortArrows
 	amountSort *sortArrows
 	merge      *widget.Button
@@ -77,12 +74,14 @@ type coinsView struct {
 // Split are disabled for now: they will merge the selected coins to one
 // address and split one coin to many.
 func newCoinsView(g *gui) *coinsView {
-	var v = &coinsView{g: g, by: sortByTime, now: time.Now()}
+	var v = &coinsView{g: g, selected: map[wire.OutPoint]bool{}, by: sortByTime, now: time.Now()}
 	v.list = container.NewVBox()
 	v.empty = widget.NewLabelWithStyle("No coins yet", fyne.TextAlignCenter, fyne.TextStyle{})
+	v.selectAll = widget.NewCheck("", v.setAll)
 	v.timeSort = newSortArrows(func(ascending bool) { v.sort(sortByTime, ascending) })
 	v.amountSort = newSortArrows(func(ascending bool) { v.sort(sortByAmount, ascending) })
 	var header = container.New(coinColumns{},
+		v.selectAll,
 		container.NewHBox(boldLabel("Time"), container.NewCenter(v.timeSort)),
 		boldLabel("Address"),
 		container.NewHBox(layout.NewSpacer(), boldLabel("Amount"), container.NewCenter(v.amountSort)),
@@ -92,19 +91,19 @@ func newCoinsView(g *gui) *coinsView {
 	v.split = widget.NewButtonWithIcon("Split", splitIcon, nil)
 	v.split.Disable()
 	v.send = widget.NewButtonWithIcon("Send", theme.UploadIcon(), g.showSend)
-	var buttons = container.NewCenter(container.NewGridWithColumns(3,
-		atLeastWide(v.merge, actionWidth), atLeastWide(v.split, actionWidth), atLeastWide(v.send, actionWidth)))
 	var sides = layout.NewCustomPaddedLayout(0, 0, coinsGap(), coinsGap())
 	v.content = container.New(coinsLayout{v},
 		container.New(sides, container.NewPadded(header)),
 		container.NewStack(container.NewCenter(v.empty), container.NewVScroll(container.New(sides, v.list))),
-		buttons,
+		container.New(sides, container.NewGridWithColumns(3, v.merge, v.split, v.send)),
 	)
 	v.showArrows()
+	v.showSelectAll()
 	return v
 }
 
-// coinsGap is the space at either side of the cards and under the buttons.
+// coinsGap is the space at either side of the cards and the buttons, and
+// under the buttons.
 func coinsGap() float32 {
 	return 2 * theme.InnerPadding()
 }
@@ -180,14 +179,22 @@ func (v *coinsView) sort(by coinSort, ascending bool) {
 	v.rebuild()
 }
 
-// rebuild sorts the coins and makes a card for each.
+// rebuild sorts the coins and makes a card for each. Coins no longer listed
+// drop out of the selection.
 func (v *coinsView) rebuild() {
 	sortCoins(v.coins, v.by, v.ascending)
+	var listed = make(map[wire.OutPoint]bool, len(v.coins))
 	var cards = make([]fyne.CanvasObject, len(v.coins))
 	v.times = make([]*widget.Label, len(v.coins))
+	v.checks = make([]*widget.Check, len(v.coins))
 	for i, c := range v.coins {
-		cards[i], v.times[i] = v.card(c)
+		listed[c.OutPoint] = true
+		cards[i], v.times[i], v.checks[i] = v.card(c)
 	}
+	for op := range v.selected {
+		if !listed[op] { delete(v.selected, op) }
+	}
+	v.showSelectAll()
 	v.list.Objects = cards
 	v.list.Refresh()
 	if len(v.coins) == 0 {
@@ -197,6 +204,49 @@ func (v *coinsView) rebuild() {
 	}
 	v.content.Refresh()
 	v.showArrows()
+}
+
+// setAll selects every coin or none, from the header check box.
+func (v *coinsView) setAll(on bool) {
+	for i, c := range v.coins {
+		v.choose(c.OutPoint, on)
+		v.checks[i].Checked = on
+		v.checks[i].Refresh()
+	}
+	v.showSelectAll()
+}
+
+// choose adds the coin to the selection or takes it out.
+func (v *coinsView) choose(op wire.OutPoint, on bool) {
+	if on {
+		v.selected[op] = true
+	} else {
+		delete(v.selected, op)
+	}
+}
+
+// showSelectAll sets the header check box from the selection: checked when
+// every coin is selected, partly when some are, and disabled without coins.
+// The fields are set directly so its OnChanged does not fire.
+func (v *coinsView) showSelectAll() {
+	var n = len(v.selected)
+	v.selectAll.Checked = n > 0 && n == len(v.coins)
+	v.selectAll.Partial = n > 0 && n < len(v.coins)
+	if len(v.coins) == 0 {
+		v.selectAll.Disable()
+	} else {
+		v.selectAll.Enable()
+	}
+	v.selectAll.Refresh()
+}
+
+// selection returns the selected coins in list order.
+func (v *coinsView) selection() []wallet.Coin {
+	var out []wallet.Coin
+	for _, c := range v.coins {
+		if v.selected[c.OutPoint] { out = append(out, c) }
+	}
+	return out
 }
 
 // sortCoins orders coins by time or amount, ties broken by the outpoint so
@@ -229,26 +279,111 @@ func (v *coinsView) refreshTimes() {
 	}
 }
 
-// card is one coin: when it appeared, its short address with a copy icon, and
-// its value, marked with an hourglass while unconfirmed. It returns the time
-// label too, to keep the time current.
-func (v *coinsView) card(c wallet.Coin) (fyne.CanvasObject, *widget.Label) {
+// card is one coin: a check box selecting it, when it appeared, its address
+// shortened to the room left by the amount, with a copy icon for the whole
+// address, and its value. An unconfirmed coin's text is grey. It returns the
+// time label too, to keep the time current, and the check box.
+func (v *coinsView) card(c wallet.Coin) (fyne.CanvasObject, *widget.Label, *widget.Check) {
+	var check = widget.NewCheck("", func(on bool) {
+		v.choose(c.OutPoint, on)
+		v.showSelectAll()
+	})
+	check.Checked = v.selected[c.OutPoint]
 	var when = widget.NewLabel(relativeTime(c.Time, v.now))
-	var address = widget.NewLabel(shortAddress(c.Address))
+	var address = widget.NewLabel(c.Address)
 	var copyIcon = newTapIcon(theme.ContentCopyIcon(), copyIconSize, func() { v.g.copyAddress(c.Address) })
-	var amount = []fyne.CanvasObject{layout.NewSpacer()}
-	if !c.Confirmed {
-		amount = append(amount, container.NewCenter(newTapIcon(hourglassIcon, hourglassSize, nil)))
-	}
-	amount = append(amount, widget.NewLabel(formatAmount(c.Value)))
-	var row = container.New(coinColumns{},
+	var cells = []fyne.CanvasObject{
 		when,
-		container.NewHBox(address, container.NewCenter(copyIcon)),
-		container.NewHBox(amount...),
-	)
+		container.New(addressFit{address: c.Address, label: address}, address, container.NewCenter(copyIcon)),
+		container.NewHBox(layout.NewSpacer(), widget.NewLabel(formatAmount(c.Value))),
+	}
+	if !c.Confirmed {
+		for i, cell := range cells {
+			cells[i] = container.NewThemeOverride(cell, pendingTheme{})
+		}
+	}
+	var row = container.New(coinColumns{}, append([]fyne.CanvasObject{check}, cells...)...)
 	var background = canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	background.CornerRadius = theme.InputRadiusSize()
-	return container.NewStack(background, container.NewPadded(row)), when
+	return container.NewStack(background, container.NewPadded(row)), when, check
+}
+
+// pendingTheme draws the text and icons of an unconfirmed coin in the grey
+// of the app theme's placeholder text, leaving everything else to that theme.
+type pendingTheme struct{}
+
+func (pendingTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	var base = fyne.CurrentApp().Settings().Theme()
+	if name == theme.ColorNameForeground { name = theme.ColorNamePlaceHolder }
+	return base.Color(name, variant)
+}
+
+func (pendingTheme) Font(style fyne.TextStyle) fyne.Resource {
+	return fyne.CurrentApp().Settings().Theme().Font(style)
+}
+
+func (pendingTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+	return fyne.CurrentApp().Settings().Theme().Icon(name)
+}
+
+func (pendingTheme) Size(name fyne.ThemeSizeName) float32 {
+	return fyne.CurrentApp().Settings().Theme().Size(name)
+}
+
+// addressTail is how many characters a shortened address keeps of its end.
+const addressTail = 6
+
+// fitAddress returns the address whole if it fits, else its start and its
+// last addressTail characters around an ellipsis, the start as long as fits
+// but at least five characters, "bc1q" and one more, or else dropped:
+// "…ryt4xl".
+func fitAddress(address string, fits func(string) bool) string {
+	if len(address) <= addressTail+1 || fits(address) { return address }
+	var end = address[len(address)-addressTail:]
+	var lo, hi = 5, len(address) - addressTail - 1
+	var best = -1
+	for lo <= hi {
+		var mid = (lo + hi) / 2
+		if fits(address[:mid] + "…" + end) {
+			best = mid
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	if best < 0 { return "…" + end }
+	return address[:best] + "…" + end
+}
+
+// labelWidth is the width of a label showing the text.
+func labelWidth(text string) float32 {
+	return textWidth(text, theme.SizeNameText, fyne.TextStyle{}) + 2*theme.InnerPadding()
+}
+
+// addressFit lays out an address cell: the label, showing as much of the
+// address as fits beside the copy icon, then the icon right after the text.
+type addressFit struct {
+	address string
+	label   *widget.Label
+}
+
+func (f addressFit) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var icon = objects[1].MinSize()
+	var shortest = fitAddress(f.address, func(string) bool { return false })
+	return fyne.NewSize(labelWidth(shortest)+theme.Padding()+icon.Width, max(f.label.MinSize().Height, icon.Height))
+}
+
+func (f addressFit) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	var icon = objects[1]
+	var iconSize = icon.MinSize()
+	var room = size.Width - theme.Padding() - iconSize.Width
+	var text = fitAddress(f.address, func(s string) bool { return labelWidth(s) <= room })
+	if f.label.Text != text { f.label.SetText(text) }
+	var labelSize = fyne.NewSize(labelWidth(text), f.label.MinSize().Height)
+	f.label.Resize(labelSize)
+	f.label.Move(fyne.NewPos(0, (size.Height-labelSize.Height)/2))
+	icon.Resize(iconSize)
+	icon.Move(fyne.NewPos(labelSize.Width+theme.Padding(), (size.Height-iconSize.Height)/2))
 }
 
 // tickTimes brings the relative coin times up to date every minute until
@@ -303,24 +438,20 @@ func relativeTime(unix int64, now time.Time) string {
 }
 
 // coinColumns lays out the header and every card alike, so their columns line
-// up: the time column, wide enough for the longest relative time, the amount
-// column, wide enough for a large amount, at the right, and the address
-// column taking the rest. Each cell is centred vertically.
+// up: the check box column, the time column, wide enough for the longest
+// relative time, the amount at the right, as wide as it needs, and the
+// address column taking the rest. Each cell is centred vertically.
 type coinColumns struct{}
 
-// timeColumnWidth and amountColumnWidth are the widths of the time and
-// amount columns: the longest texts they usually hold, with label padding,
-// the unconfirmed mark and the sort arrows.
+// timeColumnWidth is the width of the time column: the longest relative
+// time it usually holds, with label padding and the sort arrows.
 func timeColumnWidth() float32 {
 	return textWidth("11 months ago", theme.SizeNameText, fyne.TextStyle{}) + 2*theme.InnerPadding() + arrowWidth
 }
 
-func amountColumnWidth() float32 {
-	return textWidth("4 999 999 sats", theme.SizeNameText, fyne.TextStyle{}) + 2*theme.InnerPadding() + hourglassSize + theme.Padding()
-}
 
 func (coinColumns) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	var width = max(timeColumnWidth(), objects[0].MinSize().Width) + objects[1].MinSize().Width + max(amountColumnWidth(), objects[2].MinSize().Width)
+	var width = objects[0].MinSize().Width + max(timeColumnWidth(), objects[1].MinSize().Width) + objects[2].MinSize().Width + objects[3].MinSize().Width
 	var height = float32(0)
 	for _, o := range objects {
 		height = max(height, o.MinSize().Height)
@@ -329,13 +460,15 @@ func (coinColumns) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 func (coinColumns) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	var timeWidth = max(timeColumnWidth(), objects[0].MinSize().Width)
-	var amountWidth = max(amountColumnWidth(), objects[2].MinSize().Width)
+	var checkWidth = objects[0].MinSize().Width
+	var timeWidth = max(timeColumnWidth(), objects[1].MinSize().Width)
+	var amountWidth = objects[3].MinSize().Width
 	var cells = []struct {
 		x, width float32
 	}{
-		{0, timeWidth},
-		{timeWidth, max(size.Width-timeWidth-amountWidth, 0)},
+		{0, checkWidth},
+		{checkWidth, timeWidth},
+		{checkWidth + timeWidth, max(size.Width-checkWidth-timeWidth-amountWidth, 0)},
 		{size.Width - amountWidth, amountWidth},
 	}
 	for i, o := range objects {
