@@ -15,10 +15,11 @@ func TestStatus(t *testing.T) {
 	}{
 		{Status{}, 0, "Not connected"},
 		{Status{State: StateHeaders, Height: 5}, 0, "Not connected"},
-		{Status{Peers: 1}, 1, "Connected"},
-		{Status{Peers: 2, State: StateHeaders, Height: 840000}, 2, "Syncing headers: block 840000"},
-		{Status{Peers: 3, State: StateFilters, Height: 12}, 3, "Syncing filters: block 12"},
-		{Status{Peers: 5}, 3, "Connected"},
+		{Status{Peers: 1, Synced: true}, 1, "Connected"},
+		{Status{Peers: 1, Height: 969463}, 1, "Syncing (969463)..."},
+		{Status{Peers: 2, State: StateHeaders, Height: 840000}, 2, "Syncing (840000)..."},
+		{Status{Peers: 3, State: StateFilters, Height: 12}, 3, "Syncing (12)..."},
+		{Status{Peers: 5, Synced: true}, 3, "Connected"},
 	}
 	for _, c := range cases {
 		if got := c.status.Bars(); got != c.bars {
@@ -70,5 +71,46 @@ func TestStartStopUnreachable(t *testing.T) {
 func TestStartRejectsPeerWithoutPort(t *testing.T) {
 	if err := Start(&chaincfg.MainNetParams, nil, "example.org", nil); err == nil {
 		t.Fatal("peer address without a port accepted")
+	}
+}
+
+// TestSynced checks that the wallet counts as synced only while idle after a
+// successful round, with no unknown block announced since and no peer
+// advertising a higher tip.
+func TestSynced(t *testing.T) {
+	var a = testConn(t, "10.0.0.1:8333", false)
+	var b = testConn(t, "10.0.0.2:8333", false)
+	a.peer.UpdateLastBlockHeight(100)
+	b.peer.UpdateLastBlockHeight(100)
+	mu.Lock()
+	defer mu.Unlock()
+	var savedPool, savedActivity, savedHeight = pool, activity, height
+	var savedOK, savedAnnounced, savedThrough = roundOK, announced, syncedThrough
+	defer func() {
+		pool, activity, height = savedPool, savedActivity, savedHeight
+		roundOK, announced, syncedThrough = savedOK, savedAnnounced, savedThrough
+	}()
+	pool, activity, height, roundOK, announced, syncedThrough = []*conn{a, b}, StateIdle, 100, true, 2, 2
+	if !syncedLocked() {
+		t.Fatal("idle at the peers' tip after a good round is not synced")
+	}
+	activity = StateHeaders
+	if syncedLocked() {
+		t.Fatal("synced while syncing headers")
+	}
+	activity = StateIdle
+	roundOK = false
+	if syncedLocked() {
+		t.Fatal("synced after a failed round")
+	}
+	roundOK = true
+	announced = 3
+	if syncedLocked() {
+		t.Fatal("synced with a new block announced")
+	}
+	announced = 2
+	b.peer.UpdateLastBlockHeight(101)
+	if syncedLocked() {
+		t.Fatal("synced below a peer's advertised tip")
 	}
 }
