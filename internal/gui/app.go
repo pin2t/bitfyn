@@ -86,6 +86,8 @@ type gui struct {
 	send    *widget.Button
 	coinsView *coinsView
 	txView    *txView
+	stats     *statsView
+	created   int64
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -133,12 +135,13 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 		if err != nil { return fail(err) }
 	}
 	return &gui{
-		window: w,
-		store:  store,
-		wallet: wl,
-		net:    meta.Network,
-		index:  meta.NextIndex,
-		rate:   rate.Cents,
+		window:  w,
+		store:   store,
+		wallet:  wl,
+		net:     meta.Network,
+		index:   meta.NextIndex,
+		rate:    rate.Cents,
+		created: meta.CreatedAt,
 	}, nil
 }
 
@@ -149,8 +152,9 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 // below it, centred under the code, with a clipboard copy icon close after
 // the text, then the wallet balance in large type with a small grey note on
 // the incoming pending part at its right and the balance in US dollars close
-// under it in smaller grey type, all filled in by the sync status, and the
-// Receive and Send buttons.
+// under it in smaller grey type, all filled in by the sync status, the
+// Receive and Send buttons, and the wallet statistics under them, with the
+// Coins tab's gaps at the sides.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -177,12 +181,15 @@ func (g *gui) content() fyne.CanvasObject {
 	g.balanceRow = container.New(balanceLayout{}, g.balance, g.pending, g.usd)
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
+	g.stats = newStatsView()
+	g.stats.show(computeStats(sync.History(), len(sync.Coins())), g.created, time.Now())
 	return container.NewVBox(
 		container.New(headerLayout{}, title, signalInset(g.signal), network, g.status),
 		container.NewCenter(g.qr),
 		container.New(addressLayout{}, g.addr, g.copyAddr),
 		g.balanceRow,
 		g.actions(),
+		container.New(layout.NewCustomPaddedLayout(2*theme.Padding(), 0, coinsGap(), coinsGap()), g.stats.content),
 	)
 }
 
@@ -238,8 +245,7 @@ func (g *gui) startSync(peer string) {
 			g.signal.SetLevel(s.Bars())
 			g.status.SetText(s.String())
 			g.showBalance(s.Balance, s.Pending)
-			if g.coinsView != nil { g.coinsView.update(sync.Coins(), time.Now()) }
-			if g.txView != nil { g.txView.update(sync.History(), time.Now()) }
+			g.showWallet(time.Now())
 			g.rotateIfUsed()
 		})
 	})
