@@ -391,8 +391,8 @@ func (f addressFit) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	icon.Move(fyne.NewPos(labelSize.Width+theme.Padding(), (size.Height-iconSize.Height)/2))
 }
 
-// tickTimes brings the relative coin and transaction times up to date every
-// minute until done is closed.
+// tickTimes brings the relative coin and transaction times and the wallet
+// lifetime up to date every minute until done is closed.
 func (g *gui) tickTimes(done <-chan struct{}) {
 	var ticker = time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -401,12 +401,18 @@ func (g *gui) tickTimes(done <-chan struct{}) {
 		case <-done:
 			return
 		case now := <-ticker.C:
-			fyne.Do(func() {
-				g.coinsView.update(sync.Coins(), now)
-				g.txView.update(sync.History(), now)
-			})
+			fyne.Do(func() { g.showWallet(now) })
 		}
 	}
+}
+
+// showWallet shows the wallet coins, transactions and statistics as of now,
+// all from one snapshot of the sync state.
+func (g *gui) showWallet(now time.Time) {
+	var coins, history = sync.Coins(), sync.History()
+	if g.coinsView != nil { g.coinsView.update(coins, now) }
+	if g.txView != nil { g.txView.update(history, now) }
+	if g.stats != nil { g.stats.show(computeStats(history, len(coins)), g.rate, g.created, now) }
 }
 
 // copyAddress puts the address on the clipboard and says so.
@@ -429,25 +435,30 @@ func relativeTime(unix int64, now time.Time) string {
 		return "—"
 	}
 	var age = now.Sub(time.Unix(unix, 0))
-	var units = []struct {
-		size time.Duration
-		name string
-	}{
-		{365 * 24 * time.Hour, "year"},
-		{30 * 24 * time.Hour, "month"},
-		{24 * time.Hour, "day"},
-		{time.Hour, "hour"},
-		{time.Minute, "minute"},
-	}
-	for _, u := range units {
+	for _, u := range timeUnits {
 		if n := int(age / u.size); n >= 1 {
-			if n == 1 {
-				return "1 " + u.name + " ago"
-			}
-			return fmt.Sprintf("%d %ss ago", n, u.name)
+			return countOf(n, u.name) + " ago"
 		}
 	}
 	return "just now"
+}
+
+// timeUnits are the units ages are told in, the largest first.
+var timeUnits = []struct {
+	size time.Duration
+	name string
+}{
+	{365 * 24 * time.Hour, "year"},
+	{30 * 24 * time.Hour, "month"},
+	{24 * time.Hour, "day"},
+	{time.Hour, "hour"},
+	{time.Minute, "minute"},
+}
+
+// countOf is n of the unit, singular or plural: "1 day", "3 days".
+func countOf(n int, unit string) string {
+	if n == 1 { return "1 " + unit }
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 // coinColumns lays out the header and every card alike, so their columns line

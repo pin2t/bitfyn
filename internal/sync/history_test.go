@@ -57,8 +57,8 @@ func TestSpentAddress(t *testing.T) {
 
 // TestHistory checks the wallet transactions newest first: a confirmed
 // payment received from a foreign P2WPKH input, then a pending spend of it
-// with no change, with their net amounts, addresses and which are the
-// wallet's.
+// with no change, with their net amounts, the fee the wallet paid, their
+// addresses and which are the wallet's.
 func TestHistory(t *testing.T) {
 	var mine = testWallet(t)
 	params = &chaincfg.RegressionNetParams
@@ -79,8 +79,8 @@ func TestHistory(t *testing.T) {
 		t.Fatalf("%d transactions, want 2: %+v", len(list), list)
 	}
 	var sent, got = list[0], list[1]
-	if sent.Txid != spend.TxHash() || sent.Confirmed || sent.Net != -2000 {
-		t.Errorf("newest = %s confirmed %v net %d, want the pending spend of -2000", sent.Txid, sent.Confirmed, sent.Net)
+	if sent.Txid != spend.TxHash() || sent.Confirmed || sent.Net != -2000 || sent.Fee != 1000 {
+		t.Errorf("newest = %s confirmed %v net %d fee %d, want the pending spend of -2000 paying 1000", sent.Txid, sent.Confirmed, sent.Net, sent.Fee)
 	}
 	if len(sent.Inputs) != 1 || sent.Inputs[0] != (TxAddress{Address: "bc1mine", Mine: true}) {
 		t.Errorf("spend inputs = %+v, want the wallet address", sent.Inputs)
@@ -88,8 +88,8 @@ func TestHistory(t *testing.T) {
 	if len(sent.Outputs) != 1 || sent.Outputs[0] != (TxAddress{Address: otherAddr}) || otherAddr == "" {
 		t.Errorf("spend outputs = %+v, want %q", sent.Outputs, otherAddr)
 	}
-	if got.Txid != receive.TxHash() || !got.Confirmed || got.Net != 2000 {
-		t.Errorf("oldest = %s confirmed %v net %d, want the confirmed receive of 2000", got.Txid, got.Confirmed, got.Net)
+	if got.Txid != receive.TxHash() || !got.Confirmed || got.Net != 2000 || got.Fee != 0 {
+		t.Errorf("oldest = %s confirmed %v net %d fee %d, want the confirmed receive of 2000 with no fee of ours", got.Txid, got.Confirmed, got.Net, got.Fee)
 	}
 	if len(got.Inputs) != 1 || got.Inputs[0] != (TxAddress{Address: payer.EncodeAddress()}) {
 		t.Errorf("receive inputs = %+v, want the payer %s", got.Inputs, payer.EncodeAddress())

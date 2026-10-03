@@ -8,13 +8,15 @@ import "github.com/btcsuite/btcd/txscript"
 import "github.com/btcsuite/btcd/wire"
 
 // WalletTx is a wallet transaction as the history shows it: when it was
-// confirmed or first seen, what it did to the wallet balance, and the
-// addresses it spends from and pays to.
+// confirmed or first seen, what it did to the wallet balance, the fee the
+// wallet paid, set when every input spends a wallet coin, and the addresses
+// it spends from and pays to.
 type WalletTx struct {
 	Txid      chainhash.Hash
 	Time      int64
 	Confirmed bool
 	Net       int64
+	Fee       int64
 	Inputs    []TxAddress
 	Outputs   []TxAddress
 }
@@ -54,16 +56,22 @@ func buildHistory(txs []*wire.MsgTx, times []int64, confirmed int) []WalletTx {
 	var out = make([]WalletTx, len(txs))
 	for n, tx := range txs {
 		var entry = WalletTx{Txid: tx.TxHash(), Time: times[n], Confirmed: n < confirmed}
+		var funded = true
+		var fee = int64(0)
 		for _, in := range tx.TxIn {
 			var addr, value = inputAddress(in, byID)
 			entry.Inputs = append(entry.Inputs, addr)
+			funded = funded && addr.Mine
+			fee += value
 			if addr.Mine { entry.Net -= value }
 		}
 		for _, o := range tx.TxOut {
 			var addr = outputAddress(o.PkScript)
 			entry.Outputs = append(entry.Outputs, addr)
+			fee -= o.Value
 			if addr.Mine { entry.Net += o.Value }
 		}
+		if funded { entry.Fee = fee }
 		out[n] = entry
 	}
 	sort.SliceStable(out, func(i, j int) bool {
