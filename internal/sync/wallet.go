@@ -117,6 +117,7 @@ func loadWalletLocked() error {
 		return coins[i].OutPoint.String() < coins[j].OutPoint.String()
 	})
 	pendingTxs = unconfirmed
+	history = buildHistory(append(confirmed, unconfirmed...), times, len(confirmed))
 	confirmedBalance, pendingBalance = computeBalance(confirmed, unconfirmed, isWalletScript)
 	return nil
 }

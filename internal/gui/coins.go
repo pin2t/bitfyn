@@ -357,7 +357,12 @@ func fitAddress(address string, fits func(string) bool) string {
 
 // labelWidth is the width of a label showing the text.
 func labelWidth(text string) float32 {
-	return textWidth(text, theme.SizeNameText, fyne.TextStyle{}) + 2*theme.InnerPadding()
+	return styledLabelWidth(text, fyne.TextStyle{})
+}
+
+// styledLabelWidth is the width of a label showing the text in the style.
+func styledLabelWidth(text string, style fyne.TextStyle) float32 {
+	return textWidth(text, theme.SizeNameText, style) + 2*theme.InnerPadding()
 }
 
 // addressFit lays out an address cell: the label, showing as much of the
@@ -386,8 +391,8 @@ func (f addressFit) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	icon.Move(fyne.NewPos(labelSize.Width+theme.Padding(), (size.Height-iconSize.Height)/2))
 }
 
-// tickTimes brings the relative coin times up to date every minute until
-// done is closed.
+// tickTimes brings the relative coin and transaction times up to date every
+// minute until done is closed.
 func (g *gui) tickTimes(done <-chan struct{}) {
 	var ticker = time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -396,15 +401,23 @@ func (g *gui) tickTimes(done <-chan struct{}) {
 		case <-done:
 			return
 		case now := <-ticker.C:
-			fyne.Do(func() { g.coinsView.update(sync.Coins(), now) })
+			fyne.Do(func() {
+				g.coinsView.update(sync.Coins(), now)
+				g.txView.update(sync.History(), now)
+			})
 		}
 	}
 }
 
 // copyAddress puts the address on the clipboard and says so.
 func (g *gui) copyAddress(address string) {
-	fyne.CurrentApp().Clipboard().SetContent(address)
-	dialog.ShowInformation("Copied", "Address copied to clipboard", g.window)
+	g.copyText(address, "Address")
+}
+
+// copyText puts the text on the clipboard and says what was copied.
+func (g *gui) copyText(text, what string) {
+	fyne.CurrentApp().Clipboard().SetContent(text)
+	dialog.ShowInformation("Copied", what+" copied to clipboard", g.window)
 }
 
 // relativeTime says how long ago the unix time was, in its largest whole
