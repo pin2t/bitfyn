@@ -163,7 +163,8 @@ func TestSignalAlignment(t *testing.T) {
 	if textTop := status.Y + theme.InnerPadding(); textTop != barsBottom+theme.Padding() {
 		t.Fatalf("status text starts at %v, bars end at %v, want one padding apart", textTop, barsBottom)
 	}
-	var network = driver.AbsolutePositionForObject(content.(*fyne.Container).Objects[0].(*fyne.Container).Objects[2])
+	var column = content.(*fyne.Container).Objects[0].(*fyne.Container)
+	var network = driver.AbsolutePositionForObject(column.Objects[0].(*fyne.Container).Objects[2])
 	if network.Y != status.Y {
 		t.Fatalf("network name at y %v, status at y %v", network.Y, status.Y)
 	}

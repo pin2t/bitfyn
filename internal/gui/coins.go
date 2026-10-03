@@ -412,7 +412,7 @@ func (g *gui) showWallet(now time.Time) {
 	var coins, history = sync.Coins(), sync.History()
 	if g.coinsView != nil { g.coinsView.update(coins, now) }
 	if g.txView != nil { g.txView.update(history, now) }
-	if g.stats != nil { g.stats.show(computeStats(history, len(coins)), g.created, now) }
+	if g.stats != nil { g.stats.show(computeStats(history, len(coins)), g.rate, g.created, now) }
 }
 
 // copyAddress puts the address on the clipboard and says so.

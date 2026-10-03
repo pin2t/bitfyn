@@ -153,8 +153,8 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 // the text, then the wallet balance in large type with a small grey note on
 // the incoming pending part at its right and the balance in US dollars close
 // under it in smaller grey type, all filled in by the sync status, the
-// Receive and Send buttons, and the wallet statistics under them, with the
-// Coins tab's gaps at the sides.
+// Receive and Send buttons, and at the bottom the wallet statistics, with
+// the Coins tab's gaps at the sides and under them.
 func (g *gui) content() fyne.CanvasObject {
 	g.qr = NewQRWidget("")
 	g.addr = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
@@ -182,15 +182,16 @@ func (g *gui) content() fyne.CanvasObject {
 	g.signal = NewSignalWidget()
 	g.status = widget.NewLabel(sync.Status{}.String())
 	g.stats = newStatsView()
-	g.stats.show(computeStats(sync.History(), len(sync.Coins())), g.created, time.Now())
-	return container.NewVBox(
+	g.stats.show(computeStats(sync.History(), len(sync.Coins())), g.rate, g.created, time.Now())
+	var column = container.NewVBox(
 		container.New(headerLayout{}, title, signalInset(g.signal), network, g.status),
 		container.NewCenter(g.qr),
 		container.New(addressLayout{}, g.addr, g.copyAddr),
 		g.balanceRow,
 		g.actions(),
-		container.New(layout.NewCustomPaddedLayout(2*theme.Padding(), 0, coinsGap(), coinsGap()), g.stats.content),
 	)
+	var stats = container.New(layout.NewCustomPaddedLayout(0, coinsGap(), coinsGap(), coinsGap()), g.stats.object())
+	return container.NewBorder(nil, stats, nil, nil, column)
 }
 
 // signalInset pads the indicator on the right by the text padding of the
@@ -311,6 +312,7 @@ func (g *gui) showBalance(confirmed, pending int64) {
 // once one is shown.
 func (g *gui) setRate(cents int64) {
 	g.rate = cents
+	if g.stats != nil { g.stats.setRate(cents) }
 	if g.balance.Text == "" { return }
 	g.showUSD()
 	g.balanceRow.Refresh()
