@@ -20,10 +20,12 @@ var coinsIcon = theme.NewThemedResource(fyne.NewStaticResource("coins.svg", []by
 func (g *gui) tabs(home fyne.CanvasObject) *container.AppTabs {
 	g.coinsView = newCoinsView(g)
 	g.coinsView.update(sync.Coins(), time.Now())
+	g.txView = newTxView(g)
+	g.txView.update(sync.History(), time.Now())
 	var tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Home", theme.HomeIcon(), home),
 		container.NewTabItemWithIcon("Coins", coinsIcon, g.coinsView.content),
-		container.NewTabItemWithIcon("Transactions", theme.HistoryIcon(), placeholder("Transactions")),
+		container.NewTabItemWithIcon("Transactions", theme.HistoryIcon(), g.txView.content),
 		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), placeholder("Settings")),
 	)
 	tabs.SetTabLocation(container.TabLocationLeading)

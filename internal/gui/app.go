@@ -85,6 +85,7 @@ type gui struct {
 	receive *widget.Button
 	send    *widget.Button
 	coinsView *coinsView
+	txView    *txView
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -238,6 +239,7 @@ func (g *gui) startSync(peer string) {
 			g.status.SetText(s.String())
 			g.showBalance(s.Balance, s.Pending)
 			if g.coinsView != nil { g.coinsView.update(sync.Coins(), time.Now()) }
+			if g.txView != nil { g.txView.update(sync.History(), time.Now()) }
 			g.rotateIfUsed()
 		})
 	})
