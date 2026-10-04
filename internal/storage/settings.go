@@ -11,6 +11,10 @@ const SettingPinnedPeer = "pinnedPeer"
 // services only.
 const SettingTor = "tor"
 
+// SettingI2P is "on" while the wallet reaches its peers over I2P, through
+// the local I2P router, as I2P destinations only.
+const SettingI2P = "i2p"
+
 // Setting returns the value stored for the key, or "" when it is not set.
 func (s *Store) Setting(key string) (string, error) {
 	var value string
