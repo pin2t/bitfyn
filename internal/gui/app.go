@@ -51,6 +51,7 @@ func Run(opts Options) {
 		close(ticks)
 		gui.settings.stop()
 		sync.Stop()
+		gui.settings.closeTor()
 		rates.Stop()
 		_ = gui.store.Close()
 	})
@@ -58,6 +59,11 @@ func Run(opts Options) {
 	a.Lifecycle().SetOnStarted(func() {
 		var peer = gui.pinnedPeer()
 		if peer != "" && opts.Peer == "" { log.Printf("pinned peer %s from the settings", peer) }
+		gui.settings.startup()
+		if gui.settings.torOn() {
+			if peer != "" { log.Printf("pinned peer %s not used while Tor is on", peer) }
+			peer = ""
+		}
 		gui.startSync(peer)
 		go gui.tickTimes(ticks)
 		rates.Start(gui.store, func(r storage.Rate) {
@@ -93,6 +99,7 @@ type gui struct {
 	settings  *settingsView
 	created   int64
 	flagPeer  string
+	dataDir   string
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -148,6 +155,7 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 		rate:     rate.Cents,
 		created:  meta.CreatedAt,
 		flagPeer: opts.Peer,
+		dataDir:  opts.DataDir,
 	}, nil
 }
 

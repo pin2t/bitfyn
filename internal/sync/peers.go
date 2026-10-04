@@ -3,6 +3,7 @@ package sync
 import "context"
 import "fmt"
 import "log"
+import "net"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 import "github.com/btcsuite/btcd/peer"
@@ -48,11 +49,12 @@ func newConn(addr string) (*conn, error) {
 	}, nil
 }
 
-// dial connects and completes the handshake, asking the peer to announce the
-// transactions it relays when relay is set, and gives up once ctx is
-// cancelled. quit is closed once the peer disconnects, for whatever reason.
-func (c *conn) dial(ctx context.Context, relay bool) (time.Duration, error) {
-	var p, handshake, err = p2p.DialContext(ctx, params, c.addr, c.listeners(), relay)
+// dial connects through the dialer and completes the handshake, asking the
+// peer to announce the transactions it relays when relay is set, and gives
+// up once ctx is cancelled. quit is closed once the peer disconnects, for
+// whatever reason.
+func (c *conn) dial(ctx context.Context, dialer p2p.Dialer, relay bool) (time.Duration, error) {
+	var p, handshake, err = p2p.DialContext(ctx, params, dialer, c.addr, c.listeners(), relay)
 	if err != nil { return 0, err }
 	c.peer = p
 	go func() {
@@ -96,7 +98,8 @@ func (c *conn) record(ok bool, started time.Time) {
 }
 
 // listeners routes the peer's responses to this connection's channels.
-// Advertised peer addresses are persisted, a block announcement wakes the
+// Advertised peer addresses are persisted, onion ones included, a block
+// announcement wakes the
 // sync loop, and the transactions announced by the relay source are fetched
 // and checked against the wallet.
 func (c *conn) listeners() peer.MessageListeners {
@@ -126,15 +129,29 @@ func (c *conn) listeners() peer.MessageListeners {
 		},
 		OnAddr: func(_ *peer.Peer, msg *wire.MsgAddr) {
 			for _, na := range msg.AddrList {
-				if na.IP == nil || na.Port == 0 { continue }
-				var ip = na.IP.String()
-				if na.Services != 0 {
-					_ = store.UpdatePeerServices(ip, na.Port, uint64(na.Services))
-				} else {
-					_ = store.SavePeer(ip, na.Port)
-				}
+				if na.IP == nil { continue }
+				savePeerAddr(na.IP.String(), na.Port, na.Services)
 			}
 		},
+		OnAddrV2: func(_ *peer.Peer, msg *wire.MsgAddrV2) {
+			for _, na := range msg.AddrList {
+				if na.Addr == nil { continue }
+				var host = na.Addr.String()
+				if !p2p.IsOnion(host) && net.ParseIP(host) == nil { continue }
+				savePeerAddr(host, na.Port, na.Services)
+			}
+		},
+	}
+}
+
+// savePeerAddr stores an advertised peer address with its services, when
+// known.
+func savePeerAddr(host string, port uint16, services wire.ServiceFlag) {
+	if port == 0 { return }
+	if services != 0 {
+		_ = store.UpdatePeerServices(host, port, uint64(services))
+	} else {
+		_ = store.SavePeer(host, port)
 	}
 }
 

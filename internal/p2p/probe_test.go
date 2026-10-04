@@ -4,6 +4,7 @@ import "context"
 import "errors"
 import "math/rand/v2"
 import "net"
+import "strings"
 import "testing"
 import "github.com/btcsuite/btcd/chaincfg"
 import "github.com/btcsuite/btcd/wire"
@@ -61,5 +62,42 @@ func answerVersion(c net.Conn, services wire.ServiceFlag) {
 		version.Services = services
 		if wire.WriteMessage(c, version, wire.FeeFilterVersion, network) != nil { return }
 		if wire.WriteMessage(c, wire.NewMsgVerAck(), wire.FeeFilterVersion, network) != nil { return }
+	}
+}
+
+// TestOnionAddress checks that onion addresses are encoded and validated as
+// rend-spec-v3 defines them, as btcd encodes them too, and that every
+// built-in onion seed is a valid address.
+func TestOnionAddress(t *testing.T) {
+	var key = make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i * 7)
+	}
+	var host = OnionAddress(key)
+	if !IsOnion(host) || !IsOnion(strings.ToUpper(host)) {
+		t.Fatalf("IsOnion(%q) = false", host)
+	}
+	var na, err = hostToNetAddress(host, 8333, 0)
+	if err != nil || !na.IsTorV3() || na.Addr.String() != host {
+		t.Fatalf("hostToNetAddress(%q) = %v, %v; want the Tor v3 address", host, na, err)
+	}
+	var broken = []byte(host)
+	broken[10] ^= 'a' ^ 'b'
+	for _, h := range []string{string(broken), "192.0.2.1", "example.onion", host[:20] + ".onion"} {
+		if IsOnion(h) {
+			t.Errorf("IsOnion(%q) = true", h)
+		}
+	}
+	if _, err := hostToNetAddress("example.com", 8333, 0); err == nil {
+		t.Errorf("hostToNetAddress accepted a host name")
+	}
+	var seeds = OnionSeeds(&chaincfg.MainNetParams)
+	if len(seeds) == 0 || len(OnionSeeds(&chaincfg.RegressionNetParams)) != 0 {
+		t.Fatalf("%d mainnet onion seeds, want some, and none on regtest", len(seeds))
+	}
+	for _, s := range seeds {
+		if !IsOnion(s.Host) {
+			t.Errorf("seed %s is not a valid onion address", s)
+		}
 	}
 }

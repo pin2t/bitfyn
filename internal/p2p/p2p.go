@@ -17,6 +17,13 @@ import "github.com/btcsuite/btcd/wire"
 // HandshakeTimeout bounds the TCP dial and the version/verack exchange.
 const HandshakeTimeout = 15 * time.Second
 
+// OnionDialTimeout bounds opening a connection to an onion peer through Tor:
+// the onion service descriptor lookup and the rendezvous take far longer
+// than a TCP dial. OnionHandshakeTimeout bounds the version/verack exchange
+// over the slower circuit.
+const OnionDialTimeout = 2 * time.Minute
+const OnionHandshakeTimeout = 45 * time.Second
+
 // KeepAlive is how long a peer connection may stay silent, its keepalive
 // probes unanswered, before the OS drops it: the first probe goes out after
 // half of it, then keepAliveProbes probes, the last timing out at the end.
@@ -36,25 +43,41 @@ func (a PeerAddr) String() string {
 	return net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port)))
 }
 
-// Dial connects to the given peer address and completes the version/verack
-// handshake, leaving the peer ready for message exchange. The listeners are
-// installed before the connection starts so no early message is missed. The
-// returned duration is the full handshake latency, dial included. The local
-// peer advertises no services: it is a light client, and it asks the peer
-// not to relay transactions.
-func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
-	return DialContext(context.Background(), params, address, listeners, false)
+// Dialer opens the connections to peers: Direct for addresses on the
+// internet, the embedded Tor client for onion addresses.
+type Dialer interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// DialContext is Dial that gives up as soon as the context is cancelled,
-// during the TCP dial as well as during the handshake. relay sets whether the
-// peer should announce the transactions it relays, the version message relay
-// flag; without it only a BIP37 filterload turns relay on. The connection
-// probes the peer with TCP keepalives as KeepAlive sets.
-func DialContext(ctx context.Context, params *chaincfg.Params, address string, listeners peer.MessageListeners, relay bool) (*peer.Peer, time.Duration, error) {
+// Direct dials peers over plain TCP and probes the connections with TCP
+// keepalives as KeepAlive sets.
+var Direct Dialer = &net.Dialer{Timeout: HandshakeTimeout, KeepAliveConfig: keepAliveConfig()}
+
+// Dial connects directly to the given peer address and completes the
+// version/verack handshake, leaving the peer ready for message exchange. The
+// listeners are installed before the connection starts so no early message
+// is missed. The returned duration is the full handshake latency, dial
+// included. The local peer advertises no services: it is a light client, and
+// it asks the peer not to relay transactions.
+func Dial(params *chaincfg.Params, address string, listeners peer.MessageListeners) (*peer.Peer, time.Duration, error) {
+	return DialContext(context.Background(), params, Direct, address, listeners, false)
+}
+
+// DialContext is Dial through the dialer that gives up as soon as the
+// context is cancelled, during the dial as well as during the handshake. An
+// onion peer gets the longer onion timeouts. relay sets whether the peer
+// should announce the transactions it relays, the version message relay
+// flag; without it only a BIP37 filterload turns relay on. The peer is asked
+// for addrv2 messages, which carry onion addresses.
+func DialContext(ctx context.Context, params *chaincfg.Params, dialer Dialer, address string, listeners peer.MessageListeners, relay bool) (*peer.Peer, time.Duration, error) {
 	var started = time.Now()
-	var dialer = net.Dialer{Timeout: HandshakeTimeout, KeepAliveConfig: keepAliveConfig()}
-	var conn, err = dialer.DialContext(ctx, "tcp", address)
+	var dialTimeout, handshakeTimeout = HandshakeTimeout, HandshakeTimeout
+	if host, _, err := net.SplitHostPort(address); err == nil && IsOnion(host) {
+		dialTimeout, handshakeTimeout = OnionDialTimeout, OnionHandshakeTimeout
+	}
+	var dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
+	var conn, err = dialer.DialContext(dialCtx, "tcp", address)
+	cancel()
 	if err != nil {
 		return nil, 0, fmt.Errorf("dial peer %s: %w", address, err)
 	}
@@ -63,10 +86,11 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 		UserAgentVersion:    "0.1.0",
 		ChainParams:         params,
 		Services:            0,
-		ProtocolVersion:     wire.FeeFilterVersion,
+		ProtocolVersion:     wire.AddrV2Version,
 		DisableRelayTx:      !relay,
 		DisableStallHandler: true,
 		Listeners:           listeners,
+		HostToNetAddress:    hostToNetAddress,
 	}
 	var p, perr = peer.NewOutboundPeer(cfg, address)
 	if perr != nil {
@@ -74,7 +98,7 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 		return nil, 0, fmt.Errorf("create peer: %w", perr)
 	}
 	p.AssociateConnection(conn)
-	var deadline = time.Now().Add(HandshakeTimeout)
+	var deadline = time.Now().Add(handshakeTimeout)
 	for time.Now().Before(deadline) {
 		if p.VerAckReceived() {
 			return p, time.Since(started), nil
@@ -99,11 +123,11 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 // BIP157 compact filters, which the wallet syncs from.
 var ErrNoCompactFilters = errors.New("no compact filter service")
 
-// Probe connects to the peer, completes the handshake and checks that the
-// peer serves compact filters, as the sync needs, then disconnects. It gives
-// up once the context is cancelled.
+// Probe connects directly to the peer, completes the handshake and checks
+// that the peer serves compact filters, as the sync needs, then disconnects.
+// It gives up once the context is cancelled.
 func Probe(ctx context.Context, params *chaincfg.Params, address string) error {
-	var p, _, err = DialContext(ctx, params, address, peer.MessageListeners{}, false)
+	var p, _, err = DialContext(ctx, params, Direct, address, peer.MessageListeners{}, false)
 	if err != nil { return err }
 	defer p.WaitForDisconnect()
 	defer p.Disconnect()

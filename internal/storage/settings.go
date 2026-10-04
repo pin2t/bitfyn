@@ -7,6 +7,10 @@ import "errors"
 // settings, used when no peer is given on the command line.
 const SettingPinnedPeer = "pinnedPeer"
 
+// SettingTor is "on" while the wallet reaches its peers over Tor, as onion
+// services only.
+const SettingTor = "tor"
+
 // Setting returns the value stored for the key, or "" when it is not set.
 func (s *Store) Setting(key string) (string, error) {
 	var value string
