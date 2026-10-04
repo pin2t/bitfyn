@@ -28,19 +28,13 @@ create table if not exists meta (
 	nextIndex integer not null default 0
 );
 create table if not exists addresses (
-	idx            integer primary key,
+	type           text    not null check (type in ('receive', 'change')),
+	idx            integer not null,
 	derivationPath text    not null unique,
 	address        text    not null unique,
 	pubkey         blob    not null,
-	used           integer not null default 0,
-	createdAt      integer not null
-);
-create table if not exists change_addresses (
-	idx            integer primary key,
-	derivationPath text    not null unique,
-	address        text    not null unique,
-	pubkey         blob    not null,
-	createdAt      integer not null
+	createdAt      integer not null,
+	primary key (type, idx)
 );
 create table if not exists headers (
 	height     integer primary key,
@@ -131,127 +125,20 @@ func Open(path, passphrase string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := migrate(db); err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		if strings.Contains(strings.ToLower(err.Error()), "file is not a database") {
 			return nil, fmt.Errorf("cannot read wallet database (wrong passphrase or corrupt file): %w", err)
 		}
-		return nil, fmt.Errorf("migrate database: %w", err)
+		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	return &Store{db: db}, nil
 }
 
-// filterHeaderVersion marks the schema revision that switched the stored
-// filter headers from raw filter hashes to chained filter headers. Older rows
-// are discarded on open because they cannot be used for linkage verification.
-// filterPruneVersion marks the revision that made filterData nullable so a
-// downloaded filter can be pruned, keeping only its chained header. The
-// cfilters table is rebuilt and rows are dropped because filters are
-// re-downloadable from peers and old rows predate the seed-start sync.
-// rescanVersion marks the revision that rescans the blocks of addresses
-// watched after blocks paying them were scanned. Every stored address is
-// queued once: older wallets may have missed spends of such coins.
-const filterHeaderVersion = 2
-const filterPruneVersion = 3
-const rescanVersion = 4
-
-func migrate(db *sql.DB) error {
-	var _, err = db.Exec(schema)
-	if err != nil { return err }
-	if err := addPeerColumns(db); err != nil { return err }
-	return upgradeSchema(db)
-}
-
-// upgradeSchema applies one-time table migrations and stamps the schema
-// version, once per database.
-func upgradeSchema(db *sql.DB) error {
-	var version int
-	if err := db.QueryRow(`pragma user_version`).Scan(&version); err != nil {
-		return err
-	}
-	if version < filterHeaderVersion {
-		if _, err := db.Exec(`delete from cfilters`); err != nil {
-			return err
-		}
-	}
-	if version < filterPruneVersion {
-		if err := rebuildCFilters(db); err != nil {
-			return err
-		}
-	}
-	if version < rescanVersion {
-		if _, err := db.Exec(`
-			insert or ignore into rescans (address, fromHeight)
-			select address, 0 from addresses union select address, 0 from change_addresses`); err != nil {
-			return err
-		}
-	}
-	if version < rescanVersion {
-		if _, err := db.Exec(fmt.Sprintf(`pragma user_version = %d`, rescanVersion)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// rebuildCFilters recreates the cfilters table with a nullable filterData
-// column. The old rows are dropped: filter headers are re-downloaded from the
-// wallet seed height, so nothing valuable is lost.
-func rebuildCFilters(db *sql.DB) error {
-	var tx, err = db.Begin()
-	if err != nil { return err }
-	defer tx.Rollback()
-	if _, err := tx.Exec(`drop table if exists cfilters_new`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-		create table cfilters_new (
-			height       integer primary key,
-			blockHash    blob not null,
-			filterHeader blob not null,
-			filterData   blob
-		)`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`drop table cfilters`); err != nil { return err }
-	if _, err := tx.Exec(`alter table cfilters_new rename to cfilters`); err != nil { return err }
-	return tx.Commit()
-}
-
-// addPeerColumns adds the peer statistics columns to databases created
-// before they existed, keeping old wallets usable.
-func addPeerColumns(db *sql.DB) error {
-	var existing = make(map[string]bool)
-	var rows, err = db.Query(`pragma table_info(peers)`)
-	if err != nil { return err }
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name string
-		var kind string
-		var notnull int
-		var def []byte
-		var pk int
-		if err := rows.Scan(&cid, &name, &kind, &notnull, &def, &pk); err != nil {
-			return err
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil { return err }
-	for _, column := range []string{
-		`services integer not null default 0`,
-		`latencyMs integer not null default 0`,
-		`okCount integer not null default 0`,
-		`failCount integer not null default 0`,
-	} {
-		var name = strings.SplitN(column, " ", 2)[0]
-		if existing[name] { continue }
-		if _, err := db.Exec(`alter table peers add column ` + column); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// The address types: receive addresses are shown to be paid to, change
+// addresses take the change of the wallet's own payments.
+const addressReceive = "receive"
+const addressChange = "change"
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
@@ -288,19 +175,26 @@ func (s *Store) UpdateNextIndex(index uint32) error {
 	return err
 }
 
-// AddAddress persists a derived address. Idempotent per index.
+// AddAddress persists a derived receive address. Idempotent per index.
 func (s *Store) AddAddress(index uint32, path, address string, pubkey []byte) error {
+	return s.addAddress(addressReceive, index, path, address, pubkey)
+}
+
+// addAddress persists a derived address of the type. Idempotent per type and
+// index.
+func (s *Store) addAddress(kind string, index uint32, path, address string, pubkey []byte) error {
 	var _, err = s.db.Exec(
-		`insert or ignore into addresses (idx, derivationPath, address, pubkey, used, createdAt)
-		 values (?, ?, ?, ?, 0, ?)`,
-		index, path, address, pubkey, time.Now().Unix(),
+		`insert or ignore into addresses (type, idx, derivationPath, address, pubkey, createdAt)
+		 values (?, ?, ?, ?, ?, ?)`,
+		kind, index, path, address, pubkey, time.Now().Unix(),
 	)
 	return err
 }
 
-// CountAddresses returns the number of derived addresses stored so far.
+// CountAddresses returns the number of derived receive addresses stored so
+// far.
 func (s *Store) CountAddresses() (int, error) {
 	var n int
-	var err = s.db.QueryRow(`select count(*) from addresses`).Scan(&n)
+	var err = s.db.QueryRow(`select count(*) from addresses where type = ?`, addressReceive).Scan(&n)
 	return n, err
 }
