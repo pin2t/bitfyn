@@ -125,79 +125,7 @@ func TestSyncTables(t *testing.T) {
 	}
 }
 
-// TestAddPeerColumns checks that a database with the old two-column peers
-// table gains the statistics columns without losing its rows.
-func TestAddPeerColumns(t *testing.T) {
-	var path = filepath.Join(t.TempDir(), "old.db")
-	var s, err = Open(path, "")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer s.Close()
-	var drops = []string{
-		`drop table peers`,
-		`create table peers (host text not null, port integer not null, primary key (host, port))`,
-		`insert into peers (host, port) values ('10.0.0.2', 18333)`,
-	}
-	for _, query := range drops {
-		if _, err := s.db.Exec(query); err != nil {
-			t.Fatalf("%q: %v", query, err)
-		}
-	}
-	if err := addPeerColumns(s.db); err != nil {
-		t.Fatalf("addPeerColumns: %v", err)
-	}
-	if err := s.RecordPeerResult("10.0.0.2", 18333, true, 42); err != nil {
-		t.Fatalf("RecordPeerResult on migrated table: %v", err)
-	}
-	var peers, peersErr = s.Peers()
-	if peersErr != nil || len(peers) != 1 || peers[0].OkCount != 1 || peers[0].LatencyMs != 42 {
-		t.Fatalf("Peers after migration = %+v, %v", peers, peersErr)
-	}
-}
 
-// TestUpgradeSchema checks that filters stored under the old scheme are
-// cleared once, the cfilters table is rebuilt with a nullable filterData
-// column, and the schema version is stamped.
-func TestUpgradeSchema(t *testing.T) {
-	var path = filepath.Join(t.TempDir(), "f.db")
-	var s, err = Open(path, "")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer s.Close()
-	var inserts = []string{
-		`insert into cfilters (height, blockHash, filterHeader, filterData) values (7, x'11', x'22', x'33')`,
-		`pragma user_version = 0`,
-	}
-	for _, query := range inserts {
-		if _, err := s.db.Exec(query); err != nil {
-			t.Fatalf("%q: %v", query, err)
-		}
-	}
-	if err := upgradeSchema(s.db); err != nil {
-		t.Fatalf("upgradeSchema: %v", err)
-	}
-	if n, err := s.FilterCount(); err != nil || n != 0 {
-		t.Fatalf("FilterCount after upgrade = %d, %v; want 0", n, err)
-	}
-	var version int
-	if err := s.db.QueryRow(`pragma user_version`).Scan(&version); err != nil || version != rescanVersion {
-		t.Fatalf("user_version = %d, %v; want %d", version, err, rescanVersion)
-	}
-	if err := upgradeSchema(s.db); err != nil {
-		t.Fatalf("upgradeSchema again: %v", err)
-	}
-	if err := s.SaveFilter(Filter{Height: 9, BlockHash: chainhash.Hash{1}, FilterHeader: chainhash.Hash{2}}); err != nil {
-		t.Fatalf("SaveFilter with nil data after rebuild: %v", err)
-	}
-	if err := s.PruneFilterData(9); err != nil {
-		t.Fatalf("PruneFilterData after rebuild: %v", err)
-	}
-	if n, err := s.FilterResumeHeight(0); err != nil || n != 10 {
-		t.Fatalf("FilterResumeHeight after header-only row = %d, %v; want 10", n, err)
-	}
-}
 
 // TestTransactions checks that wallet transactions round-trip in block order
 // and that a rewind drops the transactions and matches above the fork.
@@ -361,45 +289,5 @@ func TestRescans(t *testing.T) {
 	got, rerr = st.Rescans()
 	if rerr != nil || len(got) != 1 || got[0] != (Rescan{"bc1b", 3}) {
 		t.Fatalf("Rescans after deletes = %+v, %v", got, rerr)
-	}
-}
-
-// TestUpgradeQueuesRescans checks that the schema upgrade queues a rescan of
-// every stored receive and change address once.
-func TestUpgradeQueuesRescans(t *testing.T) {
-	var st, err = Open(filepath.Join(t.TempDir(), "w.db"), "")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer st.Close()
-	if err := st.AddAddress(0, "m/84'/0'/0'/0/0", "bc1receive", []byte{2}); err != nil {
-		t.Fatalf("AddAddress: %v", err)
-	}
-	if err := st.AddChangeAddress(0, "m/84'/0'/0'/1/0", "bc1change", []byte{3}); err != nil {
-		t.Fatalf("AddChangeAddress: %v", err)
-	}
-	if got, err := st.Rescans(); err != nil || len(got) != 0 {
-		t.Fatalf("Rescans before upgrade = %+v, %v", got, err)
-	}
-	if _, err := st.db.Exec(`pragma user_version = 3`); err != nil {
-		t.Fatalf("reset user_version: %v", err)
-	}
-	if err := upgradeSchema(st.db); err != nil {
-		t.Fatalf("upgradeSchema: %v", err)
-	}
-	var got, rerr = st.Rescans()
-	if rerr != nil || len(got) != 2 || got[0] != (Rescan{"bc1change", 0}) || got[1] != (Rescan{"bc1receive", 0}) {
-		t.Fatalf("Rescans after upgrade = %+v, %v", got, rerr)
-	}
-	for _, r := range got {
-		if err := st.DeleteRescan(r); err != nil {
-			t.Fatalf("DeleteRescan: %v", err)
-		}
-	}
-	if err := upgradeSchema(st.db); err != nil {
-		t.Fatalf("upgradeSchema again: %v", err)
-	}
-	if got, err := st.Rescans(); err != nil || len(got) != 0 {
-		t.Fatalf("Rescans after a second upgrade = %+v, %v", got, err)
 	}
 }

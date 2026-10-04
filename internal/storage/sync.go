@@ -2,7 +2,6 @@ package storage
 
 import "database/sql"
 import "errors"
-import "time"
 import "github.com/btcsuite/btcd/chaincfg/chainhash"
 
 // Header is one validated block header kept by the SPV sync.
@@ -372,16 +371,17 @@ func (s *Store) DeletePendingBefore(unix int64) (int64, error) {
 
 // Addresses returns all derived receive addresses.
 func (s *Store) Addresses() ([]StoredAddress, error) {
-	return s.addresses(`select idx, derivationPath, address, pubkey from addresses order by idx`)
+	return s.addresses(addressReceive)
 }
 
 // ChangeAddresses returns all derived change addresses.
 func (s *Store) ChangeAddresses() ([]StoredAddress, error) {
-	return s.addresses(`select idx, derivationPath, address, pubkey from change_addresses order by idx`)
+	return s.addresses(addressChange)
 }
 
-func (s *Store) addresses(query string) ([]StoredAddress, error) {
-	var rows, err = s.db.Query(query)
+// addresses returns the derived addresses of the type in index order.
+func (s *Store) addresses(kind string) ([]StoredAddress, error) {
+	var rows, err = s.db.Query(`select idx, derivationPath, address, pubkey from addresses where type = ? order by idx`, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -399,11 +399,7 @@ func (s *Store) addresses(query string) ([]StoredAddress, error) {
 
 // AddChangeAddress records a derived change address. Idempotent.
 func (s *Store) AddChangeAddress(index uint32, path, address string, pubkey []byte) error {
-	var _, err = s.db.Exec(
-		`insert or ignore into change_addresses (idx, derivationPath, address, pubkey, createdAt) values (?, ?, ?, ?, ?)`,
-		index, path, address, pubkey, time.Now().Unix(),
-	)
-	return err
+	return s.addAddress(addressChange, index, path, address, pubkey)
 }
 
 // AddRescan queues a rescan for the address. An address queued already
