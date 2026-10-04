@@ -8,11 +8,13 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.2.0
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
+	github.com/n0madic/go-tor-client v0.0.0-20260702222402-7a54ef6d2b7a
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tyler-smith/go-bip39 v1.1.0
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/FyshOS/fancyfs v0.0.1 // indirect

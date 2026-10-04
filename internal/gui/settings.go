@@ -16,32 +16,49 @@ import "fyne.io/fyne/v2/widget"
 import "bitfyn/internal/p2p"
 import "bitfyn/internal/storage"
 import "bitfyn/internal/sync"
+import "bitfyn/internal/tor"
 
 // peerCheckDelay is how long the pinned peer field waits after an edit
 // before it connects to the typed peer, so typing does not dial every
 // partial address.
 const peerCheckDelay = 700 * time.Millisecond
 
-// settingsView is the Settings tab: the pinned peer, and the Tor and I2P
-// switches, not available yet. A pinned peer typed in is connected to, and
+// torClient is the running Tor client: it dials onion peers once ready.
+type torClient interface {
+	p2p.Dialer
+	Close()
+}
+
+// settingsView is the Settings tab: the pinned peer, the Tor switch and the
+// I2P switch, not available yet. A pinned peer typed in is connected to, and
 // once it completed the handshake and serves compact filters it is saved and
-// the sync is pinned to it at once.
+// the sync is pinned to it at once. Turning Tor on starts the built-in Tor
+// client and has the sync drop its peers, the pinned one included, for onion
+// peers; the pinned peer is greyed out until Tor is turned off again.
 type settingsView struct {
-	content fyne.CanvasObject
-	peer    *widget.Entry
-	status  *widget.RichText
-	tor     *Switch
-	i2p     *Switch
-	store   *storage.Store
-	window  fyne.Window
-	port    string
-	inUse   string
-	probe   func(ctx context.Context, addr string) error
-	apply   func(addr string) error
-	delay   time.Duration
-	cancel  context.CancelFunc
-	edits   int
-	checked func()
+	content   fyne.CanvasObject
+	peerLabel *widget.Label
+	peer      *widget.Entry
+	status    *widget.RichText
+	note      *widget.RichText
+	peerNote  []string
+	torSwitch *Switch
+	torStatus *widget.RichText
+	i2p       *Switch
+	store     *storage.Store
+	window    fyne.Window
+	port      string
+	inUse     string
+	probe     func(ctx context.Context, addr string) error
+	apply     func(addr string) error
+	delay     time.Duration
+	cancel    context.CancelFunc
+	edits     int
+	checked   func()
+	newTor    func(onState func(tor.State, error)) torClient
+	setTor    func(on bool, dialer p2p.Dialer)
+	torClient torClient
+	torStarts int
 }
 
 // newSettingsView builds the Settings tab with the pinned peer in use in its
@@ -60,30 +77,145 @@ func newSettingsView(g *gui) *settingsView {
 			return p2p.Probe(ctx, params, addr)
 		},
 		apply: sync.SetPinned,
+		newTor: func(onState func(tor.State, error)) torClient {
+			return tor.Start(g.dataDir, onState)
+		},
+		setTor:   sync.SetTor,
+		peerNote: []string{"Headers and filters are synced from this peer.", "Leave it empty to choose peers automatically."},
 	}
+	if g.flagPeer != "" {
+		v.peerNote = []string{"Set by the -peer flag for this run.", "A peer confirmed here takes over; the flag wins at the next start."}
+	}
+	v.peerLabel = widget.NewLabel("Pinned peer")
 	v.peer = widget.NewEntry()
 	v.peer.SetPlaceHolder("IP address or IP:port")
 	v.peer.SetText(v.inUse)
 	v.peer.OnChanged = v.edited
 	v.status = widget.NewRichText()
-	var note = caption("Headers and filters are synced from this peer.", "Leave it empty to choose peers automatically.")
-	if g.flagPeer != "" {
-		note = caption("Set by the -peer flag for this run.", "A peer confirmed here takes over; the flag wins at the next start.")
+	v.note = caption(v.peerNote...)
+	v.torSwitch = NewSwitch(nil)
+	if on, err := g.store.Setting(storage.SettingTor); err != nil {
+		log.Printf("settings: read Tor: %v", err)
+	} else {
+		v.torSwitch.On = on == "on"
 	}
-	v.tor = NewSwitch(nil)
-	v.tor.Disable()
+	v.torSwitch.OnChanged = v.torSwitched
+	v.torStatus = widget.NewRichText()
 	v.i2p = NewSwitch(nil)
 	v.i2p.Disable()
-	var peerRow = container.NewBorder(nil, nil, widget.NewLabel("Pinned peer"), nil,
-		container.NewVBox(v.peer, v.status, note))
+	var peerRow = container.NewBorder(nil, nil, v.peerLabel, nil,
+		container.NewVBox(v.peer, v.status, v.note))
 	v.content = container.NewPadded(container.NewVBox(
 		peerRow,
 		widget.NewSeparator(),
-		switchRow("Tor", v.tor),
+		switchRow("Tor", v.torSwitch),
+		v.torStatus,
 		switchRow("I2P", v.i2p),
-		caption("Tor and I2P are not available yet."),
+		caption("I2P is not available yet."),
 	))
+	v.showTor(tor.StateStarting, nil)
+	v.showPinned()
 	return v
+}
+
+// torOn reports whether the Tor switch is on.
+func (v *settingsView) torOn() bool {
+	return v.torSwitch.On
+}
+
+// startup starts the Tor client when Tor is on, before the sync starts, so
+// the sync dials onion peers only from the first.
+func (v *settingsView) startup() {
+	if v.torOn() { v.startTor() }
+}
+
+// torSwitched saves the Tor switch and applies it at once: on, the sync is
+// unpinned and the Tor client started; off, the Tor client is closed and the
+// sync is pinned to the pinned peer again.
+func (v *settingsView) torSwitched(on bool) {
+	var value = ""
+	if on { value = "on" }
+	if err := v.store.SetSetting(storage.SettingTor, value); err != nil {
+		dialog.ShowError(err, v.window)
+	}
+	if on {
+		v.stop()
+		if err := v.apply(""); err != nil { log.Printf("settings: unpin for Tor: %v", err) }
+		v.startTor()
+		log.Printf("settings: Tor on")
+	} else {
+		v.closeTor()
+		if err := v.apply(v.inUse); err != nil { dialog.ShowError(err, v.window) }
+		log.Printf("settings: Tor off")
+	}
+	v.showPinned()
+	if !on { v.recheck() }
+}
+
+// startTor switches the sync to onion peers and starts the Tor client; the
+// sync dials through it once it is ready.
+func (v *settingsView) startTor() {
+	v.torStarts++
+	var start = v.torStarts
+	v.setTor(true, nil)
+	v.torClient = v.newTor(func(state tor.State, err error) {
+		fyne.Do(func() { v.torChanged(start, state, err) })
+	})
+	v.showTor(tor.StateStarting, nil)
+}
+
+// torChanged shows the state of the Tor client, unless Tor was switched
+// since, and hands the client to the sync once it is ready.
+func (v *settingsView) torChanged(start int, state tor.State, err error) {
+	if start != v.torStarts || v.torClient == nil { return }
+	if state == tor.StateReady { v.setTor(true, v.torClient) }
+	v.showTor(state, err)
+}
+
+// closeTor switches the sync back to direct peers and closes the Tor client
+// in the background.
+func (v *settingsView) closeTor() {
+	v.torStarts++
+	v.setTor(false, nil)
+	if v.torClient != nil {
+		go v.torClient.Close()
+		v.torClient = nil
+	}
+	v.showTor(tor.StateStarting, nil)
+}
+
+// showTor shows the Tor state under the switch: what the switch does while
+// it is off, and how far the Tor client got while it is on.
+func (v *settingsView) showTor(state tor.State, err error) {
+	var text, color = "Only .onion peers, through the built-in Tor client.", theme.ColorNamePlaceHolder
+	switch {
+	case !v.torOn():
+	case state == tor.StateReady:
+		text, color = "Tor ready", theme.ColorNameSuccess
+	case state == tor.StateFailed:
+		text = "Tor failed to start, retrying"
+	default:
+		text = "Starting Tor..."
+	}
+	v.torStatus.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: text, Style: widget.RichTextStyle{ColorName: color}}}
+	v.torStatus.Refresh()
+}
+
+// showPinned greys the pinned peer out while Tor is on, and shows it as
+// usual while it is off.
+func (v *settingsView) showPinned() {
+	if v.torOn() {
+		v.peerLabel.Importance = widget.LowImportance
+		v.peer.Disable()
+		v.setStatus("", theme.ColorNamePlaceHolder)
+		v.note.Segments = caption("Not used while Tor is on.").Segments
+	} else {
+		v.peerLabel.Importance = widget.MediumImportance
+		v.peer.Enable()
+		v.note.Segments = caption(v.peerNote...).Segments
+	}
+	v.peerLabel.Refresh()
+	v.note.Refresh()
 }
 
 // caption is small grey text, one line for each of the lines.
@@ -105,8 +237,10 @@ func switchRow(name string, s *Switch) fyne.CanvasObject {
 	return container.NewHBox(widget.NewLabel(name), s)
 }
 
-// recheck connects to the peer in the field again, refreshing its status.
+// recheck connects to the peer in the field again, refreshing its status,
+// unless Tor is on.
 func (v *settingsView) recheck() {
+	if v.torOn() { return }
 	v.edited(v.peer.Text)
 }
 

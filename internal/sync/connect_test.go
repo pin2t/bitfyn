@@ -1,9 +1,12 @@
 package sync
 
 import "context"
+import crand "crypto/rand"
+import "fmt"
 import "math/rand/v2"
 import "net"
 import "path/filepath"
+import "slices"
 import "strconv"
 import "testing"
 import "time"
@@ -95,6 +98,9 @@ func startFill(t *testing.T, addrs []string) *storage.Store {
 	stop = make(chan struct{})
 	dialCtx, cancelDials = context.WithCancel(context.Background())
 	pinnedAddr = ""
+	torOn = false
+	torDialer = nil
+	refill = false
 	candidates = nil
 	candNext = 0
 	mu.Unlock()
@@ -200,4 +206,63 @@ func TestSetPinned(t *testing.T) {
 	if got := currentPinned(); got != "" {
 		t.Fatalf("pinned peer %q after unpinning", got)
 	}
+}
+
+// onionDialer stands in for the Tor client: it connects each onion address
+// to the local fake peer it maps to.
+type onionDialer map[string]string
+
+func (d onionDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	var local, ok = d[addr]
+	if !ok { return nil, fmt.Errorf("unknown onion address %s", addr) }
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, local)
+}
+
+// TestTorMode switches the sync to Tor and back: Tor on disconnects the
+// internet peers and dials nothing until the Tor client is ready, then only
+// the onion peers; Tor off disconnects them and dials the internet peers
+// again.
+func TestTorMode(t *testing.T) {
+	var direct = []string{fakePeer(t), fakePeer(t)}
+	var dialer = onionDialer{}
+	var onions []string
+	for range 2 {
+		var key = make([]byte, 32)
+		crand.Read(key)
+		var addr = net.JoinHostPort(p2p.OnionAddress(key), "8333")
+		dialer[addr] = fakePeer(t)
+		onions = append(onions, addr)
+	}
+	startFill(t, append(append([]string{}, direct...), onions...))
+	var connected = func(want []string) {
+		t.Helper()
+		var got []string
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			got = got[:0]
+			for _, c := range livePeers(poolPeers()) {
+				got = append(got, c.addr)
+			}
+			if len(got) == len(want) && !slices.ContainsFunc(want, func(a string) bool { return !slices.Contains(got, a) }) {
+				return
+			}
+		}
+		t.Fatalf("connected %v, want %v", got, want)
+	}
+	fillPool()
+	connected(direct)
+	SetTor(true, nil)
+	connected(nil)
+	if n := openSlots(); n != 0 {
+		t.Fatalf("%d open slots while Tor is not ready, want none", n)
+	}
+	fillPool()
+	connected(nil)
+	SetTor(true, dialer)
+	fillPool()
+	connected(onions)
+	SetTor(false, nil)
+	connected(nil)
+	fillPool()
+	connected(direct)
 }

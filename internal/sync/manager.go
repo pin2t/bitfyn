@@ -65,6 +65,7 @@ type Status struct {
 	Synced  bool
 	Balance int64
 	Pending int64
+	Tor     bool
 }
 
 // Bars returns the connectivity level from 0 to TargetPeers: one per
@@ -74,15 +75,21 @@ func (s Status) Bars() int {
 }
 
 // String is the status line: not connected, connected once synced to the
-// tip, or syncing with the block number reached so far.
+// tip, or syncing with the block number reached so far. Over Tor the first
+// and last say so.
 func (s Status) String() string {
-	if s.Peers == 0 {
+	switch {
+	case s.Peers == 0 && s.Tor:
+		return "Connecting over Tor..."
+	case s.Peers == 0:
 		return "Not connected"
-	}
-	if !s.Synced {
+	case !s.Synced:
 		return fmt.Sprintf("Syncing (%d)...", s.Height)
+	case s.Tor:
+		return "Connected over Tor"
+	default:
+		return "Connected"
 	}
-	return "Connected"
 }
 
 var mu sync.Mutex
@@ -101,6 +108,9 @@ var poolChanged chan struct{}
 var pinnedAddr string
 var pinnedSeen time.Time
 var cancelPinned context.CancelFunc = func() {}
+var torOn bool
+var torDialer p2p.Dialer
+var refill bool
 var roundOK bool
 var announced int
 var syncedThrough int
@@ -139,6 +149,7 @@ func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus 
 	cancelPinned = func() {}
 	var pinnedCtx context.Context
 	if pinned != "" { pinnedCtx, cancelPinned = context.WithCancel(dialCtx) }
+	refill = true
 	roundOK = false
 	announced = 0
 	syncedThrough = 0
@@ -204,6 +215,67 @@ func SetPinned(addr string) error {
 	return nil
 }
 
+// SetTor switches the sync between peers on the internet and onion peers
+// reached through Tor. It may be called before Start, which keeps the mode.
+// Switching disconnects every peer of the other kind, the pinned one
+// included, and refills the pool with peers of the new kind: with Tor on
+// only onion peers are dialed, through the dialer, and none while it is nil,
+// the Tor client not being ready yet. The pinned peer is left to SetPinned.
+func SetTor(on bool, dialer p2p.Dialer) {
+	if !on { dialer = nil }
+	mu.Lock()
+	var changed = on != torOn
+	torOn = on
+	torDialer = dialer
+	var closing []*conn
+	if changed {
+		for _, c := range pool {
+			if p2p.IsOnion(c.host) != on { closing = append(closing, c) }
+		}
+		candidates = nil
+		candNext = 0
+	}
+	refill = true
+	var running = !stopped
+	mu.Unlock()
+	switch {
+	case changed && on:
+		log.Printf("sync: Tor on, connecting to onion peers only, %d peers disconnected", len(closing))
+	case changed:
+		log.Printf("sync: Tor off, connecting to peers directly, %d onion peers disconnected", len(closing))
+	case on && dialer != nil:
+		log.Printf("sync: Tor ready, dialing onion peers")
+	}
+	for _, c := range closing {
+		c.peer.Disconnect()
+	}
+	if running {
+		notifyPool()
+		emit()
+	}
+}
+
+// torMode reports whether the sync uses onion peers only.
+func torMode() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return torOn
+}
+
+// dialerFor returns the dialer to reach the peer with: the Tor client for an
+// onion peer while Tor is on and ready, a direct connection for any other
+// peer while Tor is off. ok is false for a peer the current mode does not
+// dial.
+func dialerFor(addr string) (dialer p2p.Dialer, ok bool) {
+	var host, _, err = net.SplitHostPort(addr)
+	if err != nil { return nil, false }
+	mu.Lock()
+	defer mu.Unlock()
+	if p2p.IsOnion(host) != torOn { return nil, false }
+	if !torOn { return p2p.Direct, true }
+	return torDialer, torDialer != nil
+}
+
 // currentPinned returns the pinned peer, "" when none is set.
 func currentPinned() string {
 	mu.Lock()
@@ -237,7 +309,7 @@ func emit() {
 	defer emitMu.Unlock()
 	var confirmed, pending = walletBalance()
 	mu.Lock()
-	var status = Status{State: activity, Peers: len(pool), Height: height, Synced: syncedLocked(), Balance: confirmed, Pending: pending}
+	var status = Status{State: activity, Peers: len(pool), Height: height, Synced: syncedLocked(), Balance: confirmed, Pending: pending, Tor: torOn}
 	var cb = notify
 	var live = !stopped
 	mu.Unlock()
@@ -300,19 +372,23 @@ func pause(delay time.Duration) bool {
 	}
 }
 
-// maintain fills the pool with fillPool and then keeps it filled up to
-// TargetPeers, dialing as many next candidates concurrently as peers are
-// missing. While a pinned peer is set, one slot is kept for it; keepPinned
-// dials it on its own.
+// maintain fills the pool with fillPool, at the start and again after the
+// Tor mode changed, and keeps it filled up to TargetPeers, dialing as many
+// next candidates concurrently as peers are missing. While a pinned peer is
+// set, one slot is kept for it; keepPinned dials it on its own.
 func maintain() {
 	defer wg.Done()
-	fillPool()
 	for {
 		select {
 		case <-stop:
 			return
 		default:
 		}
+		mu.Lock()
+		var again = refill
+		refill = false
+		mu.Unlock()
+		if again { fillPool() }
 		var need = openSlots()
 		var wait = retryDelay
 		if need > 0 {
@@ -344,7 +420,7 @@ func maintain() {
 // maintain to continue with.
 func fillPool() {
 	if openSlots() <= 0 { return }
-	var list, err = peerCandidates(params, store, currentPinned())
+	var list, err = peerCandidates(params, store, currentPinned(), torMode())
 	if err != nil {
 		log.Printf("peer discovery: %v", err)
 		return
@@ -383,7 +459,8 @@ feed:
 }
 
 // openSlots is how many more peers the pool takes: TargetPeers less the
-// connected peers, and less one kept for a pinned peer while it is away.
+// connected peers, and less one kept for a pinned peer while it is away;
+// none while Tor is on but not ready.
 func openSlots() int {
 	mu.Lock()
 	defer mu.Unlock()
@@ -392,6 +469,7 @@ func openSlots() int {
 
 // openSlotsLocked is openSlots with mu held.
 func openSlotsLocked() int {
+	if torOn && torDialer == nil { return 0 }
 	var n = TargetPeers - len(pool)
 	if pinnedAddr != "" && !slices.ContainsFunc(pool, func(c *conn) bool { return c.pinned }) { n-- }
 	return n
@@ -550,7 +628,7 @@ func takeCandidates(n int) []string {
 		var exhausted = candNext >= len(candidates)
 		mu.Unlock()
 		if !exhausted || len(taken) >= n { break }
-		var fresh, err = peerCandidates(params, store, currentPinned())
+		var fresh, err = peerCandidates(params, store, currentPinned(), torMode())
 		if err != nil {
 			log.Printf("peer discovery: %v", err)
 			break
@@ -569,10 +647,12 @@ func takeCandidates(n int) []string {
 // was filled by others. A dial abandoned through ctx is not held against the
 // peer.
 func connect(ctx context.Context, addr string, pinned bool) bool {
+	var dialer, ok = dialerFor(addr)
+	if !ok { return false }
 	var c, err = newConn(addr)
 	if err != nil { return false }
 	c.pinned = pinned
-	var handshake, herr = c.dial(ctx, true)
+	var handshake, herr = c.dial(ctx, dialer, true)
 	if herr != nil {
 		if ctx.Err() != nil { return false }
 		log.Printf("peer %s: connect failed: %v", addr, herr)
@@ -605,6 +685,12 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 	if pinned && addr != pinnedAddr {
 		mu.Unlock()
 		log.Printf("peer %s: no longer the pinned peer, disconnecting", addr)
+		c.close()
+		return false
+	}
+	if p2p.IsOnion(c.host) != torOn {
+		mu.Unlock()
+		log.Printf("peer %s: Tor switched meanwhile, disconnecting", addr)
 		c.close()
 		return false
 	}
@@ -815,9 +901,11 @@ feed:
 // dialAnchor connects to one candidate just long enough to ask it for the
 // filter header anchor.
 func dialAnchor(addr string) (chainhash.Hash, error) {
+	var dialer, ok = dialerFor(addr)
+	if !ok { return chainhash.Hash{}, fmt.Errorf("peer %s not reachable in the current Tor mode", addr) }
 	var c, err = newConn(addr)
 	if err != nil { return chainhash.Hash{}, err }
-	if _, err := c.dial(dialCtx, false); err != nil {
+	if _, err := c.dial(dialCtx, dialer, false); err != nil {
 		_ = store.RecordPeerResult(c.host, c.port, false, 0)
 		return chainhash.Hash{}, err
 	}
@@ -839,8 +927,11 @@ func dialAnchor(addr string) (chainhash.Hash, error) {
 // peerCandidates builds the list of peers to fill the pool with: stored and
 // freshly discovered peers in random order, without the pinned peer, which is
 // dialed on its own. Stored peers that are known not to serve compact filters
-// are skipped. An empty list is an error only without a pinned peer.
-func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string) ([]string, error) {
+// are skipped. With tor set they are the stored onion peers and the built-in
+// onion seeds, with no DNS lookup; without, the stored internet peers and
+// those of the DNS seeds. An empty list is an error only without a pinned
+// peer.
+func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string, tor bool) ([]string, error) {
 	var list []string
 	var seen = map[string]bool{pinned: true}
 	var add = func(addr string) {
@@ -852,15 +943,23 @@ func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string) 
 	if err != nil { return nil, err }
 	for _, p := range stored {
 		if p.Services != 0 && p.Services&uint64(wire.SFNodeCF) == 0 { continue }
+		if p2p.IsOnion(p.Host) != tor { continue }
 		add(net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
 	}
-	for _, seed := range p2p.Seeds(network) {
+	var seeds []p2p.PeerAddr
+	if tor {
+		seeds = p2p.OnionSeeds(network)
+	} else {
+		seeds = p2p.Seeds(network)
+	}
+	for _, seed := range seeds {
 		add(seed.String())
 	}
 	rand.Shuffle(len(list), func(i, j int) {
 		list[i], list[j] = list[j], list[i]
 	})
 	if len(list) == 0 && pinned == "" {
+		if tor { return nil, fmt.Errorf("no onion peer addresses for network %s", network.Name) }
 		return nil, fmt.Errorf("no peer addresses for network %s (pass -peer or run a local node)", network.Name)
 	}
 	return list, nil
