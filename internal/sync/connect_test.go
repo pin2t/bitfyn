@@ -170,3 +170,34 @@ func TestFillPoolUnreachable(t *testing.T) {
 		t.Fatalf("%d peers connected, want none", n)
 	}
 }
+
+// TestSetPinned pins the running sync to a peer, then to another one, then
+// unpins it: each pinned peer gets connected as the pinned peer, the one
+// pinned before is disconnected, and an address without a port is refused.
+func TestSetPinned(t *testing.T) {
+	startFill(t, nil)
+	var connected = func(want string) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			var peers = livePeers(poolPeers())
+			var c = pinnedConn()
+			if want == "" && len(peers) == 0 { return }
+			if want != "" && c != nil && c.addr == want && len(peers) == 1 { return }
+		}
+		t.Fatalf("pinned peer %q not the only peer connected; pinned %q", want, currentPinned())
+	}
+	if err := SetPinned("192.0.2.1"); err == nil {
+		t.Fatalf("SetPinned accepted an address without a port")
+	}
+	var first = fakePeer(t)
+	if err := SetPinned(first); err != nil { t.Fatalf("SetPinned: %v", err) }
+	connected(first)
+	var second = fakePeer(t)
+	if err := SetPinned(second); err != nil { t.Fatalf("SetPinned: %v", err) }
+	connected(second)
+	if err := SetPinned(""); err != nil { t.Fatalf("SetPinned: %v", err) }
+	connected("")
+	if got := currentPinned(); got != "" {
+		t.Fatalf("pinned peer %q after unpinning", got)
+	}
+}

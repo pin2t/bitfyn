@@ -49,13 +49,16 @@ func Run(opts Options) {
 	var ticks = make(chan struct{})
 	w.SetOnClosed(func() {
 		close(ticks)
+		gui.settings.stop()
 		sync.Stop()
 		rates.Stop()
 		_ = gui.store.Close()
 	})
 	w.SetContent(gui.tabs(gui.content()))
 	a.Lifecycle().SetOnStarted(func() {
-		gui.startSync(opts.Peer)
+		var peer = gui.pinnedPeer()
+		if peer != "" && opts.Peer == "" { log.Printf("pinned peer %s from the settings", peer) }
+		gui.startSync(peer)
 		go gui.tickTimes(ticks)
 		rates.Start(gui.store, func(r storage.Rate) {
 			fyne.Do(func() { gui.setRate(r.Cents) })
@@ -87,7 +90,9 @@ type gui struct {
 	coinsView *coinsView
 	txView    *txView
 	stats     *statsView
+	settings  *settingsView
 	created   int64
+	flagPeer  string
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -135,13 +140,14 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 		if err != nil { return fail(err) }
 	}
 	return &gui{
-		window:  w,
-		store:   store,
-		wallet:  wl,
-		net:     meta.Network,
-		index:   meta.NextIndex,
-		rate:    rate.Cents,
-		created: meta.CreatedAt,
+		window:   w,
+		store:    store,
+		wallet:   wl,
+		net:      meta.Network,
+		index:    meta.NextIndex,
+		rate:     rate.Cents,
+		created:  meta.CreatedAt,
+		flagPeer: opts.Peer,
 	}, nil
 }
 
@@ -254,6 +260,18 @@ func (g *gui) startSync(peer string) {
 		log.Printf("sync failed to start: %v", err)
 		g.status.SetText("Sync failed: " + err.Error())
 	}
+}
+
+// pinnedPeer is the peer the sync is pinned to: the -peer flag when given,
+// the peer saved in the settings otherwise, if any.
+func (g *gui) pinnedPeer() string {
+	if g.flagPeer != "" { return g.flagPeer }
+	var saved, err = g.store.Setting(storage.SettingPinnedPeer)
+	if err != nil {
+		log.Printf("settings: read pinned peer: %v", err)
+		return ""
+	}
+	return saved
 }
 
 // rotateIfUsed moves on to the next address once the displayed one has

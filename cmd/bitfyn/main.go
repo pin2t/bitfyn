@@ -18,7 +18,7 @@ func main() {
 	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
 	var dbPass  = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
 	var check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
-	var peer    = flag.String("peer", "", "trusted P2P peer (host:port) to always sync from; it is never replaced and is reconnected when lost. Other peers only cross-check it")
+	var peer    = flag.String("peer", "", "trusted P2P peer (host:port) to always sync from; it is never replaced and is reconnected when lost. Other peers only cross-check it. Wins over the pinned peer saved in Settings")
 	flag.Parse()
 	var logFile, err = setupLogging(*dataDir)
 	if err != nil {

@@ -100,6 +100,7 @@ var wake chan struct{}
 var poolChanged chan struct{}
 var pinnedAddr string
 var pinnedSeen time.Time
+var cancelPinned context.CancelFunc = func() {}
 var roundOK bool
 var announced int
 var syncedThrough int
@@ -135,6 +136,9 @@ func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus 
 	poolChanged = make(chan struct{}, 1)
 	pinnedAddr = pinned
 	pinnedSeen = time.Now()
+	cancelPinned = func() {}
+	var pinnedCtx context.Context
+	if pinned != "" { pinnedCtx, cancelPinned = context.WithCancel(dialCtx) }
 	roundOK = false
 	announced = 0
 	syncedThrough = 0
@@ -147,8 +151,64 @@ func Start(network *chaincfg.Params, db *storage.Store, pinned string, onStatus 
 	emit()
 	go maintain()
 	go syncLoop()
-	if pinned != "" { go keepPinned() }
+	if pinned != "" { go keepPinned(pinnedCtx, pinned) }
 	return nil
+}
+
+// SetPinned pins the running sync to another peer, as Start's pinned does,
+// or unpins it with "". The connection to the peer pinned before is closed,
+// and so is a pool connection to the new peer, which is dialed again as the
+// pinned peer. Headers and filters are synced from it once it connects. It
+// does nothing while the sync is stopped.
+func SetPinned(addr string) error {
+	if addr != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return fmt.Errorf("peer address %q must include a port", addr)
+		}
+	}
+	mu.Lock()
+	if stopped || addr == pinnedAddr {
+		mu.Unlock()
+		return nil
+	}
+	var old = pinnedAddr
+	cancelPinned()
+	cancelPinned = func() {}
+	pinnedAddr = addr
+	pinnedSeen = time.Now()
+	var closing []*conn
+	for _, c := range pool {
+		if c.pinned || c.addr == addr { closing = append(closing, c) }
+	}
+	var ctx context.Context
+	if addr != "" {
+		ctx, cancelPinned = context.WithCancel(dialCtx)
+		wg.Add(1)
+	}
+	mu.Unlock()
+	switch {
+	case addr == "":
+		log.Printf("sync: pinned peer %s removed", old)
+	case old == "":
+		log.Printf("sync: pinned peer set to %s", addr)
+	default:
+		log.Printf("sync: pinned peer changed from %s to %s", old, addr)
+	}
+	for _, c := range closing {
+		c.peer.Disconnect()
+	}
+	if addr != "" { go keepPinned(ctx, addr) }
+	notifyPool()
+	wakeSync()
+	emit()
+	return nil
+}
+
+// currentPinned returns the pinned peer, "" when none is set.
+func currentPinned() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return pinnedAddr
 }
 
 // Stop ends the background sync, closes every peer connection and waits for
@@ -284,7 +344,7 @@ func maintain() {
 // maintain to continue with.
 func fillPool() {
 	if openSlots() <= 0 { return }
-	var list, err = peerCandidates(params, store, pinnedAddr)
+	var list, err = peerCandidates(params, store, currentPinned())
 	if err != nil {
 		log.Printf("peer discovery: %v", err)
 		return
@@ -337,20 +397,21 @@ func openSlotsLocked() int {
 	return n
 }
 
-// keepPinned keeps the pinned peer connected: it dials it, waits for the
+// keepPinned keeps the pinned peer connected until ctx is cancelled, as
+// the sync stops or another peer is pinned: it dials it, waits for the
 // connection to drop and dials again. It backs off while the peer is
 // unreachable or keeps dropping the connection soon after the handshake, as
 // a node with full inbound slots does when it evicts its newest peer.
-func keepPinned() {
+func keepPinned(ctx context.Context, addr string) {
 	defer wg.Done()
 	var backoff = retryDelay
 	for {
-		if connect(dialCtx, pinnedAddr, true) {
+		if connect(ctx, addr, true) {
 			var c = pinnedConn()
 			var since = time.Now()
 			if c != nil {
 				select {
-				case <-stop:
+				case <-ctx.Done():
 					return
 				case <-c.quit:
 				}
@@ -360,10 +421,15 @@ func keepPinned() {
 				backoff = retryDelay
 				continue
 			}
-			log.Printf("pinned peer %s dropped the connection after %s", pinnedAddr, lasted.Round(time.Millisecond))
+			log.Printf("pinned peer %s dropped the connection after %s", addr, lasted.Round(time.Millisecond))
 		}
-		log.Printf("pinned peer %s: retrying in %s", pinnedAddr, backoff)
-		if !pause(backoff) { return }
+		if ctx.Err() != nil { return }
+		log.Printf("pinned peer %s: retrying in %s", addr, backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 		backoff = min(backoff*2, pinnedMaxBackoff)
 	}
 }
@@ -416,7 +482,7 @@ func orderedPeers() []*conn {
 // peer set, only the pinned peer qualifies, nil meaning waiting for it, until
 // it has been away for pinnedFallbackAfter: then the oldest other peer does.
 func primary() *conn {
-	if pinnedAddr != "" {
+	if currentPinned() != "" {
 		if c := pinnedConn(); c != nil { return c }
 		if !pinnedAway() { return nil }
 	}
@@ -437,21 +503,21 @@ func filterPeers() []*conn {
 // pinnedAway says whether a pinned peer is set but has not been connected
 // for pinnedFallbackAfter, so the sync falls back to the other peers.
 func pinnedAway() bool {
-	if pinnedAddr == "" || pinnedConn() != nil { return false }
 	mu.Lock()
-	defer mu.Unlock()
-	return time.Since(pinnedSeen) >= pinnedFallbackAfter
+	var addr, seen = pinnedAddr, pinnedSeen
+	mu.Unlock()
+	if addr == "" || pinnedConn() != nil { return false }
+	return time.Since(seen) >= pinnedFallbackAfter
 }
 
 // fallbackTimer fires when the sync falls back from the away pinned peer to
 // the others. It is nil, never firing, without a pinned peer or once the
 // fallback is due.
 func fallbackTimer() <-chan time.Time {
-	if pinnedAddr == "" { return nil }
 	mu.Lock()
-	var left = pinnedFallbackAfter - time.Since(pinnedSeen)
+	var addr, left = pinnedAddr, pinnedFallbackAfter-time.Since(pinnedSeen)
 	mu.Unlock()
-	if left <= 0 { return nil }
+	if addr == "" || left <= 0 { return nil }
 	return time.After(left)
 }
 
@@ -459,10 +525,11 @@ func fallbackTimer() <-chan time.Time {
 // that answered a request: headers and filters are synced from it unless it
 // is away and the sync fell back to the other peers.
 func requirePrimary(peers []*conn) error {
-	if pinnedAddr == "" || (len(peers) > 0 && peers[0].pinned) || pinnedAway() {
+	var addr = currentPinned()
+	if addr == "" || (len(peers) > 0 && peers[0].pinned) || pinnedAway() {
 		return nil
 	}
-	return fmt.Errorf("pinned peer %s did not answer", pinnedAddr)
+	return fmt.Errorf("pinned peer %s did not answer", addr)
 }
 
 // takeCandidates returns up to n candidate addresses not already connected,
@@ -483,7 +550,7 @@ func takeCandidates(n int) []string {
 		var exhausted = candNext >= len(candidates)
 		mu.Unlock()
 		if !exhausted || len(taken) >= n { break }
-		var fresh, err = peerCandidates(params, store, pinnedAddr)
+		var fresh, err = peerCandidates(params, store, currentPinned())
 		if err != nil {
 			log.Printf("peer discovery: %v", err)
 			break
@@ -532,6 +599,12 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 	mu.Lock()
 	if stopped {
 		mu.Unlock()
+		c.close()
+		return false
+	}
+	if pinned && addr != pinnedAddr {
+		mu.Unlock()
+		log.Printf("peer %s: no longer the pinned peer, disconnecting", addr)
 		c.close()
 		return false
 	}
@@ -593,12 +666,12 @@ func syncLoop() {
 			}
 			continue
 		}
-		if pinnedAddr != "" && c.pinned == fellBack {
+		if pinned := currentPinned(); pinned != "" && c.pinned == fellBack {
 			fellBack = !c.pinned
 			if fellBack {
-				log.Printf("sync: pinned peer %s away for %s, syncing from %s", pinnedAddr, pinnedFallbackAfter, c.addr)
+				log.Printf("sync: pinned peer %s away for %s, syncing from %s", pinned, pinnedFallbackAfter, c.addr)
 			} else {
-				log.Printf("sync: pinned peer %s is back, syncing from it", pinnedAddr)
+				log.Printf("sync: syncing from pinned peer %s", pinned)
 			}
 		}
 		mu.Lock()
