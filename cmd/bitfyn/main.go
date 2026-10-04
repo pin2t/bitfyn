@@ -10,6 +10,7 @@ import "path/filepath"
 import "time"
 import "github.com/skip2/go-qrcode"
 import "bitfyn/internal/gui"
+import "bitfyn/internal/i2p"
 import "bitfyn/internal/storage"
 import "bitfyn/internal/wallet"
 
@@ -18,6 +19,7 @@ func main() {
 	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
 	var dbPass  = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
 	var check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
+	var i2pSAM  = flag.String("i2psam", i2p.DefaultSAM, "SAM bridge address (host:port) of the local I2P router, such as i2pd, used while I2P is on in Settings")
 	var peer    = flag.String("peer", "", "trusted P2P peer (host:port) to always sync from; it is never replaced and is reconnected when lost. Other peers only cross-check it. Wins over the pinned peer saved in Settings")
 	flag.Parse()
 	var logFile, err = setupLogging(*dataDir)
@@ -35,7 +37,7 @@ func main() {
 		}
 		return
 	}
-	gui.Run(gui.Options{DataDir: *dataDir, Network: *network, DBPass: *dbPass, Peer: *peer})
+	gui.Run(gui.Options{DataDir: *dataDir, Network: *network, DBPass: *dbPass, Peer: *peer, I2PSAM: *i2pSAM})
 }
 
 // setupLogging sends the log to the console when bitfyn runs from a

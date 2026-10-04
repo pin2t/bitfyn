@@ -1,12 +1,14 @@
 package sync
 
 import "context"
+import "encoding/base32"
 import crand "crypto/rand"
 import "fmt"
 import "math/rand/v2"
 import "net"
 import "path/filepath"
 import "slices"
+import "strings"
 import "strconv"
 import "testing"
 import "time"
@@ -98,8 +100,7 @@ func startFill(t *testing.T, addrs []string) *storage.Store {
 	stop = make(chan struct{})
 	dialCtx, cancelDials = context.WithCancel(context.Background())
 	pinnedAddr = ""
-	torOn = false
-	torDialer = nil
+	overlays = map[p2p.Network]p2p.Dialer{}
 	refill = false
 	candidates = nil
 	candNext = 0
@@ -109,6 +110,7 @@ func startFill(t *testing.T, addrs []string) *storage.Store {
 		stopped = true
 		close(stop)
 		cancelDials()
+		overlays = map[p2p.Network]p2p.Dialer{}
 		var open = append([]*conn(nil), pool...)
 		mu.Unlock()
 		for _, c := range open {
@@ -208,15 +210,49 @@ func TestSetPinned(t *testing.T) {
 	}
 }
 
-// onionDialer stands in for the Tor client: it connects each onion address
-// to the local fake peer it maps to.
-type onionDialer map[string]string
+// overlayDialer stands in for the Tor or I2P client: it connects each onion
+// or I2P address to the local fake peer it maps to.
+type overlayDialer map[string]string
 
-func (d onionDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+func (d overlayDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	var local, ok = d[addr]
 	if !ok { return nil, fmt.Errorf("unknown onion address %s", addr) }
 	var dialer net.Dialer
 	return dialer.DialContext(ctx, network, local)
+}
+
+// overlayPeers maps count fake peers to addresses on the network, Tor or
+// I2P, in the dialer, and returns the addresses.
+func overlayPeers(t *testing.T, n p2p.Network, count int, dialer overlayDialer) []string {
+	var out []string
+	for range count {
+		var key = make([]byte, 32)
+		crand.Read(key)
+		var host = p2p.OnionAddress(key)
+		if n == p2p.NetI2P {
+			host = strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)) + ".b32.i2p"
+		}
+		var addr = net.JoinHostPort(host, "8333")
+		dialer[addr] = fakePeer(t)
+		out = append(out, addr)
+	}
+	return out
+}
+
+// awaitPeers waits until exactly the peers at the addresses are connected.
+func awaitPeers(t *testing.T, want []string) {
+	t.Helper()
+	var got []string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		got = got[:0]
+		for _, c := range livePeers(poolPeers()) {
+			got = append(got, c.addr)
+		}
+		if len(got) == len(want) && !slices.ContainsFunc(want, func(a string) bool { return !slices.Contains(got, a) }) {
+			return
+		}
+	}
+	t.Fatalf("connected %v, want %v", got, want)
 }
 
 // TestTorMode switches the sync to Tor and back: Tor on disconnects the
@@ -225,44 +261,52 @@ func (d onionDialer) DialContext(ctx context.Context, network, addr string) (net
 // again.
 func TestTorMode(t *testing.T) {
 	var direct = []string{fakePeer(t), fakePeer(t)}
-	var dialer = onionDialer{}
-	var onions []string
-	for range 2 {
-		var key = make([]byte, 32)
-		crand.Read(key)
-		var addr = net.JoinHostPort(p2p.OnionAddress(key), "8333")
-		dialer[addr] = fakePeer(t)
-		onions = append(onions, addr)
-	}
+	var dialer = overlayDialer{}
+	var onions = overlayPeers(t, p2p.NetTor, 2, dialer)
 	startFill(t, append(append([]string{}, direct...), onions...))
-	var connected = func(want []string) {
-		t.Helper()
-		var got []string
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-			got = got[:0]
-			for _, c := range livePeers(poolPeers()) {
-				got = append(got, c.addr)
-			}
-			if len(got) == len(want) && !slices.ContainsFunc(want, func(a string) bool { return !slices.Contains(got, a) }) {
-				return
-			}
-		}
-		t.Fatalf("connected %v, want %v", got, want)
-	}
 	fillPool()
-	connected(direct)
-	SetTor(true, nil)
-	connected(nil)
+	awaitPeers(t, direct)
+	SetOverlay(p2p.NetTor, true, nil)
+	awaitPeers(t, nil)
 	if n := openSlots(); n != 0 {
 		t.Fatalf("%d open slots while Tor is not ready, want none", n)
 	}
 	fillPool()
-	connected(nil)
-	SetTor(true, dialer)
+	awaitPeers(t, nil)
+	SetOverlay(p2p.NetTor, true, dialer)
 	fillPool()
-	connected(onions)
-	SetTor(false, nil)
-	connected(nil)
+	awaitPeers(t, onions)
+	SetOverlay(p2p.NetTor, false, nil)
+	awaitPeers(t, nil)
 	fillPool()
-	connected(direct)
+	awaitPeers(t, direct)
+}
+
+// TestTorAndI2P turns I2P on, then Tor too, then I2P off: only the I2P
+// peers are dialed, then the onion peers join them, then the I2P peers are
+// disconnected and only the onion peers stay. The status names the
+// networks.
+func TestTorAndI2P(t *testing.T) {
+	var direct = []string{fakePeer(t)}
+	var dialer = overlayDialer{}
+	var onions = overlayPeers(t, p2p.NetTor, 1, dialer)
+	var i2ps = overlayPeers(t, p2p.NetI2P, 1, dialer)
+	startFill(t, append(append(append([]string{}, direct...), onions...), i2ps...))
+	SetOverlay(p2p.NetI2P, true, dialer)
+	fillPool()
+	awaitPeers(t, i2ps)
+	SetOverlay(p2p.NetTor, true, dialer)
+	fillPool()
+	awaitPeers(t, append(append([]string{}, onions...), i2ps...))
+	mu.Lock()
+	var via = viaLocked()
+	mu.Unlock()
+	if via != "Tor and I2P" {
+		t.Fatalf("via %q, want Tor and I2P", via)
+	}
+	SetOverlay(p2p.NetI2P, false, nil)
+	awaitPeers(t, onions)
+	if got := (Status{Peers: 0, Via: "Tor"}).String(); got != "Connecting over Tor..." {
+		t.Fatalf("status %q", got)
+	}
 }

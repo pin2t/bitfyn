@@ -60,10 +60,14 @@ func onionChecksum(key []byte) []byte {
 }
 
 // hostToNetAddress is the peer address the version message names: the
-// service key of an onion host, which btcd then leaves out, or the IP.
+// service key of an onion host, which btcd then leaves out, the unroutable
+// 0.0.0.0 for an I2P host, which btcd cannot encode, or the IP.
 func hostToNetAddress(host string, port uint16, services wire.ServiceFlag) (*wire.NetAddressV2, error) {
 	if key, err := onionKey(host); err == nil {
 		return wire.NetAddressV2FromBytes(time.Now(), services, key, port), nil
+	}
+	if IsI2P(host) {
+		return wire.NetAddressV2FromBytes(time.Now(), services, net.IPv4zero, port), nil
 	}
 	var ip = net.ParseIP(host)
 	if ip == nil {

@@ -1,6 +1,7 @@
 // Package gui implements the Fyne user interface of the wallet.
 package gui
 
+import "cmp"
 import "errors"
 import "fmt"
 import "image/color"
@@ -16,6 +17,7 @@ import "fyne.io/fyne/v2/layout"
 import "fyne.io/fyne/v2/theme"
 import "fyne.io/fyne/v2/widget"
 import "github.com/btcsuite/btcd/chaincfg"
+import "bitfyn/internal/i2p"
 import "bitfyn/internal/rates"
 import "bitfyn/internal/storage"
 import "bitfyn/internal/sync"
@@ -27,6 +29,7 @@ type Options struct {
 	Network string
 	DBPass  string
 	Peer    string
+	I2PSAM  string
 }
 
 // Run starts the Fyne application and blocks until the window is closed.
@@ -51,7 +54,7 @@ func Run(opts Options) {
 		close(ticks)
 		gui.settings.stop()
 		sync.Stop()
-		gui.settings.closeTor()
+		gui.settings.closeOverlays()
 		rates.Stop()
 		_ = gui.store.Close()
 	})
@@ -60,8 +63,8 @@ func Run(opts Options) {
 		var peer = gui.pinnedPeer()
 		if peer != "" && opts.Peer == "" { log.Printf("pinned peer %s from the settings", peer) }
 		gui.settings.startup()
-		if gui.settings.torOn() {
-			if peer != "" { log.Printf("pinned peer %s not used while Tor is on", peer) }
+		if gui.settings.overlayOn() {
+			if peer != "" { log.Printf("pinned peer %s not used while Tor or I2P is on", peer) }
 			peer = ""
 		}
 		gui.startSync(peer)
@@ -100,6 +103,7 @@ type gui struct {
 	created   int64
 	flagPeer  string
 	dataDir   string
+	i2pSAM    string
 }
 
 // newGUI opens the database, creating the wallet on first run, and
@@ -156,6 +160,7 @@ func newGUI(opts Options, w fyne.Window) (*gui, error) {
 		created:  meta.CreatedAt,
 		flagPeer: opts.Peer,
 		dataDir:  opts.DataDir,
+		i2pSAM:   cmp.Or(opts.I2PSAM, i2p.DefaultSAM),
 	}, nil
 }
 

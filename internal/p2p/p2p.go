@@ -17,12 +17,13 @@ import "github.com/btcsuite/btcd/wire"
 // HandshakeTimeout bounds the TCP dial and the version/verack exchange.
 const HandshakeTimeout = 15 * time.Second
 
-// OnionDialTimeout bounds opening a connection to an onion peer through Tor:
-// the onion service descriptor lookup and the rendezvous take far longer
-// than a TCP dial. OnionHandshakeTimeout bounds the version/verack exchange
-// over the slower circuit.
-const OnionDialTimeout = 2 * time.Minute
-const OnionHandshakeTimeout = 45 * time.Second
+// OverlayDialTimeout bounds opening a connection to an onion peer through
+// Tor or to an I2P peer through I2P: the onion service rendezvous and the
+// I2P destination lookup and tunnels take far longer than a TCP dial.
+// OverlayHandshakeTimeout bounds the version/verack exchange over the
+// slower path.
+const OverlayDialTimeout = 2 * time.Minute
+const OverlayHandshakeTimeout = 45 * time.Second
 
 // KeepAlive is how long a peer connection may stay silent, its keepalive
 // probes unanswered, before the OS drops it: the first probe goes out after
@@ -65,15 +66,15 @@ func Dial(params *chaincfg.Params, address string, listeners peer.MessageListene
 
 // DialContext is Dial through the dialer that gives up as soon as the
 // context is cancelled, during the dial as well as during the handshake. An
-// onion peer gets the longer onion timeouts. relay sets whether the peer
-// should announce the transactions it relays, the version message relay
+// onion or I2P peer gets the longer overlay timeouts. relay sets whether the
+// peer should announce the transactions it relays, the version message relay
 // flag; without it only a BIP37 filterload turns relay on. The peer is asked
 // for addrv2 messages, which carry onion addresses.
 func DialContext(ctx context.Context, params *chaincfg.Params, dialer Dialer, address string, listeners peer.MessageListeners, relay bool) (*peer.Peer, time.Duration, error) {
 	var started = time.Now()
 	var dialTimeout, handshakeTimeout = HandshakeTimeout, HandshakeTimeout
-	if host, _, err := net.SplitHostPort(address); err == nil && IsOnion(host) {
-		dialTimeout, handshakeTimeout = OnionDialTimeout, OnionHandshakeTimeout
+	if host, _, err := net.SplitHostPort(address); err == nil && NetworkOf(host) != NetDirect {
+		dialTimeout, handshakeTimeout = OverlayDialTimeout, OverlayHandshakeTimeout
 	}
 	var dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
 	var conn, err = dialer.DialContext(dialCtx, "tcp", address)

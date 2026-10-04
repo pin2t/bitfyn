@@ -7,6 +7,7 @@ import "math/rand/v2"
 import "net"
 import "slices"
 import "strconv"
+import "strings"
 import "sync"
 import "time"
 import "github.com/btcsuite/btcd/chaincfg"
@@ -65,7 +66,7 @@ type Status struct {
 	Synced  bool
 	Balance int64
 	Pending int64
-	Tor     bool
+	Via     string
 }
 
 // Bars returns the connectivity level from 0 to TargetPeers: one per
@@ -75,18 +76,18 @@ func (s Status) Bars() int {
 }
 
 // String is the status line: not connected, connected once synced to the
-// tip, or syncing with the block number reached so far. Over Tor the first
-// and last say so.
+// tip, or syncing with the block number reached so far. Over Tor or I2P the
+// first and last name the networks, Via.
 func (s Status) String() string {
 	switch {
-	case s.Peers == 0 && s.Tor:
-		return "Connecting over Tor..."
+	case s.Peers == 0 && s.Via != "":
+		return "Connecting over " + s.Via + "..."
 	case s.Peers == 0:
 		return "Not connected"
 	case !s.Synced:
 		return fmt.Sprintf("Syncing (%d)...", s.Height)
-	case s.Tor:
-		return "Connected over Tor"
+	case s.Via != "":
+		return "Connected over " + s.Via
 	default:
 		return "Connected"
 	}
@@ -108,8 +109,7 @@ var poolChanged chan struct{}
 var pinnedAddr string
 var pinnedSeen time.Time
 var cancelPinned context.CancelFunc = func() {}
-var torOn bool
-var torDialer p2p.Dialer
+var overlays = map[p2p.Network]p2p.Dialer{}
 var refill bool
 var roundOK bool
 var announced int
@@ -215,36 +215,43 @@ func SetPinned(addr string) error {
 	return nil
 }
 
-// SetTor switches the sync between peers on the internet and onion peers
-// reached through Tor. It may be called before Start, which keeps the mode.
-// Switching disconnects every peer of the other kind, the pinned one
-// included, and refills the pool with peers of the new kind: with Tor on
-// only onion peers are dialed, through the dialer, and none while it is nil,
-// the Tor client not being ready yet. The pinned peer is left to SetPinned.
-func SetTor(on bool, dialer p2p.Dialer) {
+// SetOverlay turns the anonymity network n, Tor or I2P, on or off for the
+// sync. With none on, peers are reached directly over the internet; with
+// some on, only peers on those networks are, each through the dialer of its
+// network, and none of a network whose dialer is nil, its client not being
+// ready yet. It may be called before Start, which keeps the networks.
+// Turning a network on or off disconnects every peer no longer allowed, the
+// pinned one included, and refills the pool. The pinned peer is left to
+// SetPinned.
+func SetOverlay(n p2p.Network, on bool, dialer p2p.Dialer) {
 	if !on { dialer = nil }
 	mu.Lock()
-	var changed = on != torOn
-	torOn = on
-	torDialer = dialer
+	var _, was = overlays[n]
+	if on {
+		overlays[n] = dialer
+	} else {
+		delete(overlays, n)
+	}
+	var changed = was != on
 	var closing []*conn
 	if changed {
 		for _, c := range pool {
-			if p2p.IsOnion(c.host) != on { closing = append(closing, c) }
+			if !allowedLocked(p2p.NetworkOf(c.host)) { closing = append(closing, c) }
 		}
 		candidates = nil
 		candNext = 0
 	}
 	refill = true
 	var running = !stopped
+	var via = viaLocked()
 	mu.Unlock()
 	switch {
-	case changed && on:
-		log.Printf("sync: Tor on, connecting to onion peers only, %d peers disconnected", len(closing))
+	case changed && via != "":
+		log.Printf("sync: %s %s, connecting over %s only, %d peers disconnected", n, onOff(on), via, len(closing))
 	case changed:
-		log.Printf("sync: Tor off, connecting to peers directly, %d onion peers disconnected", len(closing))
+		log.Printf("sync: %s off, connecting to peers directly, %d peers disconnected", n, len(closing))
 	case on && dialer != nil:
-		log.Printf("sync: Tor ready, dialing onion peers")
+		log.Printf("sync: %s ready, dialing its peers", n)
 	}
 	for _, c := range closing {
 		c.peer.Disconnect()
@@ -255,25 +262,65 @@ func SetTor(on bool, dialer p2p.Dialer) {
 	}
 }
 
-// torMode reports whether the sync uses onion peers only.
-func torMode() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return torOn
+// onOff names a switch position.
+func onOff(on bool) string {
+	if on { return "on" }
+	return "off"
 }
 
-// dialerFor returns the dialer to reach the peer with: the Tor client for an
-// onion peer while Tor is on and ready, a direct connection for any other
-// peer while Tor is off. ok is false for a peer the current mode does not
-// dial.
+// allowedLocked, with mu held, says whether peers on the network are used:
+// direct peers while no anonymity network is on, peers on the networks on
+// otherwise.
+func allowedLocked(n p2p.Network) bool {
+	if len(overlays) == 0 { return n == p2p.NetDirect }
+	var _, ok = overlays[n]
+	return ok
+}
+
+// overlayReadyLocked, with mu held, says whether the client of some
+// anonymity network on is ready to dial.
+func overlayReadyLocked() bool {
+	for _, dialer := range overlays {
+		if dialer != nil { return true }
+	}
+	return false
+}
+
+// viaLocked, with mu held, names the anonymity networks on, "Tor", "I2P" or
+// "Tor and I2P", or is empty with none.
+func viaLocked() string {
+	var names []string
+	for _, n := range []p2p.Network{p2p.NetTor, p2p.NetI2P} {
+		if _, ok := overlays[n]; ok { names = append(names, n.String()) }
+	}
+	return strings.Join(names, " and ")
+}
+
+// allowedNetworks returns the networks whose peers are used: the anonymity
+// networks on, or the direct network with none.
+func allowedNetworks() []p2p.Network {
+	mu.Lock()
+	defer mu.Unlock()
+	var out []p2p.Network
+	for _, n := range []p2p.Network{p2p.NetDirect, p2p.NetTor, p2p.NetI2P} {
+		if allowedLocked(n) { out = append(out, n) }
+	}
+	return out
+}
+
+// dialerFor returns the dialer to reach the peer with: a direct connection
+// for a peer on the internet while no anonymity network is on, the client of
+// the peer's anonymity network while it is on and ready. ok is false for a
+// peer not dialed now.
 func dialerFor(addr string) (dialer p2p.Dialer, ok bool) {
 	var host, _, err = net.SplitHostPort(addr)
 	if err != nil { return nil, false }
+	var n = p2p.NetworkOf(host)
 	mu.Lock()
 	defer mu.Unlock()
-	if p2p.IsOnion(host) != torOn { return nil, false }
-	if !torOn { return p2p.Direct, true }
-	return torDialer, torDialer != nil
+	if !allowedLocked(n) { return nil, false }
+	if n == p2p.NetDirect { return p2p.Direct, true }
+	return overlays[n], overlays[n] != nil
 }
 
 // currentPinned returns the pinned peer, "" when none is set.
@@ -309,7 +356,7 @@ func emit() {
 	defer emitMu.Unlock()
 	var confirmed, pending = walletBalance()
 	mu.Lock()
-	var status = Status{State: activity, Peers: len(pool), Height: height, Synced: syncedLocked(), Balance: confirmed, Pending: pending, Tor: torOn}
+	var status = Status{State: activity, Peers: len(pool), Height: height, Synced: syncedLocked(), Balance: confirmed, Pending: pending, Via: viaLocked()}
 	var cb = notify
 	var live = !stopped
 	mu.Unlock()
@@ -373,7 +420,7 @@ func pause(delay time.Duration) bool {
 }
 
 // maintain fills the pool with fillPool, at the start and again after the
-// Tor mode changed, and keeps it filled up to TargetPeers, dialing as many
+// networks changed, and keeps it filled up to TargetPeers, dialing as many
 // next candidates concurrently as peers are missing. While a pinned peer is
 // set, one slot is kept for it; keepPinned dials it on its own.
 func maintain() {
@@ -414,13 +461,15 @@ func maintain() {
 }
 
 // fillPool connects the first peers quickly: connectWorkers goroutines each
-// take the next candidate of a freshly shuffled list, dial it, and repeat
-// until the pool is full or the list runs out. The handshakes still in flight
+// take the next candidate of a freshly shuffled list, dial it unless it is
+// connected already, as after a network was turned on with peers of others
+// connected, and repeat until the pool is full or the list runs out. The
+// handshakes still in flight
 // once the pool is full are abandoned. The candidates not dialed are left for
 // maintain to continue with.
 func fillPool() {
 	if openSlots() <= 0 { return }
-	var list, err = peerCandidates(params, store, currentPinned(), torMode())
+	var list, err = peerCandidates(params, store, currentPinned(), allowedNetworks())
 	if err != nil {
 		log.Printf("peer discovery: %v", err)
 		return
@@ -434,6 +483,7 @@ func fillPool() {
 		go func() {
 			defer workers.Done()
 			for addr := range work {
+				if connected(addr) { continue }
 				if connect(ctx, addr, false) && openSlots() <= 0 { cancel() }
 			}
 		}()
@@ -460,7 +510,7 @@ feed:
 
 // openSlots is how many more peers the pool takes: TargetPeers less the
 // connected peers, and less one kept for a pinned peer while it is away;
-// none while Tor is on but not ready.
+// none while no anonymity network on is ready.
 func openSlots() int {
 	mu.Lock()
 	defer mu.Unlock()
@@ -469,7 +519,7 @@ func openSlots() int {
 
 // openSlotsLocked is openSlots with mu held.
 func openSlotsLocked() int {
-	if torOn && torDialer == nil { return 0 }
+	if len(overlays) > 0 && !overlayReadyLocked() { return 0 }
 	var n = TargetPeers - len(pool)
 	if pinnedAddr != "" && !slices.ContainsFunc(pool, func(c *conn) bool { return c.pinned }) { n-- }
 	return n
@@ -510,6 +560,13 @@ func keepPinned(ctx context.Context, addr string) {
 		}
 		backoff = min(backoff*2, pinnedMaxBackoff)
 	}
+}
+
+// connected says whether the peer at the address is in the pool.
+func connected(addr string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return slices.ContainsFunc(pool, func(c *conn) bool { return c.addr == addr })
 }
 
 func poolSize() int {
@@ -628,7 +685,7 @@ func takeCandidates(n int) []string {
 		var exhausted = candNext >= len(candidates)
 		mu.Unlock()
 		if !exhausted || len(taken) >= n { break }
-		var fresh, err = peerCandidates(params, store, currentPinned(), torMode())
+		var fresh, err = peerCandidates(params, store, currentPinned(), allowedNetworks())
 		if err != nil {
 			log.Printf("peer discovery: %v", err)
 			break
@@ -688,9 +745,15 @@ func connect(ctx context.Context, addr string, pinned bool) bool {
 		c.close()
 		return false
 	}
-	if p2p.IsOnion(c.host) != torOn {
+	if !allowedLocked(p2p.NetworkOf(c.host)) {
 		mu.Unlock()
-		log.Printf("peer %s: Tor switched meanwhile, disconnecting", addr)
+		log.Printf("peer %s: its network was switched off meanwhile, disconnecting", addr)
+		c.close()
+		return false
+	}
+	if slices.ContainsFunc(pool, func(other *conn) bool { return other.addr == addr }) {
+		mu.Unlock()
+		log.Printf("peer %s: connected already, disconnecting the second connection", addr)
 		c.close()
 		return false
 	}
@@ -902,7 +965,7 @@ feed:
 // filter header anchor.
 func dialAnchor(addr string) (chainhash.Hash, error) {
 	var dialer, ok = dialerFor(addr)
-	if !ok { return chainhash.Hash{}, fmt.Errorf("peer %s not reachable in the current Tor mode", addr) }
+	if !ok { return chainhash.Hash{}, fmt.Errorf("peer %s not dialed on the networks on", addr) }
 	var c, err = newConn(addr)
 	if err != nil { return chainhash.Hash{}, err }
 	if _, err := c.dial(dialCtx, dialer, false); err != nil {
@@ -925,13 +988,13 @@ func dialAnchor(addr string) (chainhash.Hash, error) {
 }
 
 // peerCandidates builds the list of peers to fill the pool with: stored and
-// freshly discovered peers in random order, without the pinned peer, which is
-// dialed on its own. Stored peers that are known not to serve compact filters
-// are skipped. With tor set they are the stored onion peers and the built-in
-// onion seeds, with no DNS lookup; without, the stored internet peers and
-// those of the DNS seeds. An empty list is an error only without a pinned
-// peer.
-func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string, tor bool) ([]string, error) {
+// freshly discovered peers on the allowed networks in random order, without
+// the pinned peer, which is dialed on its own. Stored peers that are known
+// not to serve compact filters are skipped. Peers on the internet come from
+// the store and the DNS seeds, onion and I2P peers from the store and the
+// built-in seeds of their network, with no DNS lookup. An empty list is an
+// error only without a pinned peer.
+func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string, allowed []p2p.Network) ([]string, error) {
 	var list []string
 	var seen = map[string]bool{pinned: true}
 	var add = func(addr string) {
@@ -943,23 +1006,28 @@ func peerCandidates(network *chaincfg.Params, db *storage.Store, pinned string, 
 	if err != nil { return nil, err }
 	for _, p := range stored {
 		if p.Services != 0 && p.Services&uint64(wire.SFNodeCF) == 0 { continue }
-		if p2p.IsOnion(p.Host) != tor { continue }
+		if !slices.Contains(allowed, p2p.NetworkOf(p.Host)) { continue }
 		add(net.JoinHostPort(p.Host, strconv.Itoa(int(p.Port))))
 	}
-	var seeds []p2p.PeerAddr
-	if tor {
-		seeds = p2p.OnionSeeds(network)
-	} else {
-		seeds = p2p.Seeds(network)
-	}
-	for _, seed := range seeds {
-		add(seed.String())
+	for _, n := range allowed {
+		var seeds []p2p.PeerAddr
+		switch n {
+		case p2p.NetDirect:
+			seeds = p2p.Seeds(network)
+		case p2p.NetTor:
+			seeds = p2p.OnionSeeds(network)
+		case p2p.NetI2P:
+			seeds = p2p.I2PSeeds(network)
+		}
+		for _, seed := range seeds {
+			add(seed.String())
+		}
 	}
 	rand.Shuffle(len(list), func(i, j int) {
 		list[i], list[j] = list[j], list[i]
 	})
 	if len(list) == 0 && pinned == "" {
-		if tor { return nil, fmt.Errorf("no onion peer addresses for network %s", network.Name) }
+		if !slices.Contains(allowed, p2p.NetDirect) { return nil, fmt.Errorf("no %v peer addresses for network %s", allowed, network.Name) }
 		return nil, fmt.Errorf("no peer addresses for network %s (pass -peer or run a local node)", network.Name)
 	}
 	return list, nil
