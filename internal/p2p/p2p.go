@@ -5,6 +5,7 @@
 package p2p
 
 import "context"
+import "errors"
 import "fmt"
 import "net"
 import "strconv"
@@ -92,6 +93,24 @@ func DialContext(ctx context.Context, params *chaincfg.Params, address string, l
 	p.Disconnect()
 	p.WaitForDisconnect()
 	return nil, 0, fmt.Errorf("handshake with %s timed out", address)
+}
+
+// ErrNoCompactFilters is returned by Probe for a peer that does not serve
+// BIP157 compact filters, which the wallet syncs from.
+var ErrNoCompactFilters = errors.New("no compact filter service")
+
+// Probe connects to the peer, completes the handshake and checks that the
+// peer serves compact filters, as the sync needs, then disconnects. It gives
+// up once the context is cancelled.
+func Probe(ctx context.Context, params *chaincfg.Params, address string) error {
+	var p, _, err = DialContext(ctx, params, address, peer.MessageListeners{}, false)
+	if err != nil { return err }
+	defer p.WaitForDisconnect()
+	defer p.Disconnect()
+	if p.Services()&wire.SFNodeCF == 0 {
+		return fmt.Errorf("%s: %w", address, ErrNoCompactFilters)
+	}
+	return nil
 }
 
 // keepAliveConfig probes an idle connection after half of KeepAlive and then

@@ -93,6 +93,10 @@ create table if not exists rescans (
 	address    text    primary key,
 	fromHeight integer not null
 );
+create table if not exists settings (
+	key   text primary key,
+	value text not null
+);
 `
 
 // Meta is the single wallet metadata row.

@@ -4,7 +4,6 @@ import "time"
 import "fyne.io/fyne/v2"
 import "fyne.io/fyne/v2/container"
 import "fyne.io/fyne/v2/theme"
-import "fyne.io/fyne/v2/widget"
 import "bitfyn/internal/sync"
 
 // coinsIcon is two overlapping coins, the Material Design "toll" icon like
@@ -16,24 +15,25 @@ var coinsIcon = theme.NewThemedResource(fyne.NewStaticResource("coins.svg", []by
 
 // tabs puts the home view in the Home tab of a tab bar running down the left
 // of the window, above the Coins, Transactions and Settings tabs, each shown
-// as its icon over its name. Home is selected.
+// as its icon over its name. Home is selected. Opening Settings checks the
+// pinned peer again.
 func (g *gui) tabs(home fyne.CanvasObject) *container.AppTabs {
 	g.coinsView = newCoinsView(g)
 	g.coinsView.update(sync.Coins(), time.Now())
 	g.txView = newTxView(g)
 	g.txView.update(sync.History(), time.Now())
+	g.settings = newSettingsView(g)
+	var settings = container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), g.settings.content)
 	var tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Home", theme.HomeIcon(), home),
 		container.NewTabItemWithIcon("Coins", coinsIcon, g.coinsView.content),
 		container.NewTabItemWithIcon("Transactions", theme.HistoryIcon(), g.txView.content),
-		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), placeholder("Settings")),
+		settings,
 	)
+	tabs.OnSelected = func(tab *container.TabItem) {
+		if tab == settings { g.settings.recheck() }
+	}
 	tabs.SetTabLocation(container.TabLocationLeading)
 	tabs.SelectIndex(0)
 	return tabs
-}
-
-// placeholder is the page of a tab that has no content yet: its name, centred.
-func placeholder(name string) fyne.CanvasObject {
-	return container.NewCenter(widget.NewLabelWithStyle(name, fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 }
