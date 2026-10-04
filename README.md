@@ -121,9 +121,6 @@ the built-in analyzers.
 
 - [x] HD key generation, SegWit addresses, QR display, encrypted SQLite
 - [x] SPV sync: header chain download + BIP158 compact block filters
-- [ ] Bloom/utxo tracking of wallet addresses, balance and history UI
+- [x] Bloom/utxo tracking of wallet addresses, balance and history UI
 - [ ] Spend path: PSBT creation/signing (hardware wallet friendly)
 - [ ] Keyring integration for the database passphrase
-
-The SPV sync is headless for now (`-sync`); showing the sync state in the GUI
-and fetching matched transactions come with the balance/history milestone.
