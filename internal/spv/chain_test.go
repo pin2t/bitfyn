@@ -124,23 +124,103 @@ func TestChainAdd(t *testing.T) {
 	}
 }
 
-// TestTestnetMinDifficulty checks the 20-minute min-difficulty consensus rule.
+// TestTestnetMinDifficulty checks the 20-minute min-difficulty consensus
+// rule of testnet3 and testnet4.
 func TestTestnetMinDifficulty(t *testing.T) {
-	var params = chaincfg.TestNet3Params
-	params.PowLimitBits = easyBits
-	var c = NewChain(&params)
-	if err := c.Add(&params.GenesisBlock.Header); err != nil {
-		t.Fatalf("add genesis: %v", err)
+	for _, base := range []chaincfg.Params{chaincfg.TestNet3Params, chaincfg.TestNet4Params} {
+		var params = base
+		params.PowLimitBits = easyBits
+		var c = NewChain(&params)
+		if err := c.Add(&params.GenesisBlock.Header); err != nil {
+			t.Fatalf("%s: add genesis: %v", params.Name, err)
+		}
+		var prev = params.GenesisBlock.Header.BlockHash()
+		var late = params.GenesisBlock.Header.Timestamp.Add(21 * time.Minute)
+		var hdr = mineHeader(prev, params.PowLimitBits, late)
+		if err := c.Add(&hdr); err != nil {
+			t.Fatalf("%s: min-difficulty header after 21 minutes rejected: %v", params.Name, err)
+		}
+		var early = late.Add(time.Second)
+		hdr = mineHeader(hdr.BlockHash(), params.PowLimitBits, early)
+		if err := c.Add(&hdr); err == nil {
+			t.Fatalf("%s: min-difficulty header without the required gap accepted", params.Name)
+		}
 	}
+}
+
+// trustedChain builds a chain of the network with n headers after genesis,
+// ten minutes apart, without mining: bitsAt gives the bits at each height.
+func trustedChain(t *testing.T, params *chaincfg.Params, n int, bitsAt func(height int) uint32) *Chain {
+	var c = NewChain(params)
+	if err := c.AppendTrusted(&params.GenesisBlock.Header); err != nil {
+		t.Fatalf("append genesis: %v", err)
+	}
+	var genesis = params.GenesisBlock.Header.Timestamp
 	var prev = params.GenesisBlock.Header.BlockHash()
-	var late = params.GenesisBlock.Header.Timestamp.Add(21 * time.Minute)
-	var hdr = mineHeader(prev, params.PowLimitBits, late)
-	if err := c.Add(&hdr); err != nil {
-		t.Fatalf("min-difficulty header after 21 minutes rejected: %v", err)
+	for height := 1; height <= n; height++ {
+		var bits = bitsAt(height)
+		var hdr = wire.BlockHeader{Version: 4, PrevBlock: prev, Bits: bits, Timestamp: genesis.Add(time.Duration(height) * 10 * time.Minute)}
+		if err := c.AppendTrusted(&hdr); err != nil {
+			t.Fatalf("append header %d: %v", height, err)
+		}
+		prev = hdr.BlockHash()
 	}
-	var early = late.Add(time.Second)
-	hdr = mineHeader(hdr.BlockHash(), params.PowLimitBits, early)
+	return c
+}
+
+// TestTestnetDifficultyAtLimit checks that testnet3 and testnet4 accept
+// blocks less than 20 minutes apart at the minimum difficulty when it is the
+// difficulty of the period, as at the start of testnet4.
+func TestTestnetDifficultyAtLimit(t *testing.T) {
+	for _, base := range []chaincfg.Params{chaincfg.TestNet3Params, chaincfg.TestNet4Params} {
+		var params = base
+		params.PowLimitBits = easyBits
+		var c = trustedChain(t, &params, retargetInterval+1, func(int) uint32 { return easyBits })
+		var parent, _ = c.Tip()
+		var hdr = mineHeader(parent.Hash, easyBits, parent.Timestamp.Add(time.Minute))
+		if err := c.Add(&hdr); err != nil {
+			t.Fatalf("%s: header at the period's minimum difficulty rejected: %v", params.Name, err)
+		}
+	}
+}
+
+// TestRetargetBIP94 checks the testnet4 difficulty retarget: it scales the
+// bits of the period's first block even when its last block has the minimum
+// difficulty, bans the minimum difficulty at the retarget and rejects a
+// timestamp more than 10 minutes before the parent's.
+func TestRetargetBIP94(t *testing.T) {
+	const periodBits = 0x2000ffff
+	var params = chaincfg.TestNet4Params
+	params.PowLimitBits = easyBits
+	params.PowLimit, _ = compactToBig(easyBits)
+	var last = 2*retargetInterval - 1
+	var c = trustedChain(t, &params, last, func(height int) uint32 {
+		if height == last { return easyBits }
+		return periodBits
+	})
+	var first, _ = c.HeaderAt(retargetInterval)
+	var parent, _ = c.Tip()
+	var want, err = nextRetargetBits(first.Timestamp, parent.Timestamp, periodBits, &params)
+	if err != nil { t.Fatal(err) }
+	var testnet3, _ = nextRetargetBits(first.Timestamp, parent.Timestamp, easyBits, &params)
+	if want == testnet3 {
+		t.Fatalf("test chain does not tell BIP94 from testnet3: both retarget to %x", want)
+	}
+	var late = parent.Timestamp.Add(21 * time.Minute)
+	var hdr = mineHeader(parent.Hash, easyBits, late)
 	if err := c.Add(&hdr); err == nil {
-		t.Fatal("min-difficulty header without the required gap accepted")
+		t.Fatal("min-difficulty header at the retarget accepted")
+	}
+	hdr = mineHeader(parent.Hash, testnet3, late)
+	if err := c.Add(&hdr); err == nil {
+		t.Fatal("retarget from the last block's bits accepted")
+	}
+	hdr = mineHeader(parent.Hash, want, parent.Timestamp.Add(-11*time.Minute))
+	if err := c.Add(&hdr); err == nil {
+		t.Fatal("time-warped retarget header accepted")
+	}
+	hdr = mineHeader(parent.Hash, want, parent.Timestamp.Add(-9*time.Minute))
+	if err := c.Add(&hdr); err != nil {
+		t.Fatalf("retarget header rejected: %v", err)
 	}
 }

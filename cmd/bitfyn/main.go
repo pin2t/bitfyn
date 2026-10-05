@@ -16,7 +16,7 @@ import "bitfyn/internal/wallet"
 
 func main() {
 	var dataDir = flag.String("datadir", defaultDataDir(), "directory for the wallet database")
-	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
+	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, testnet4, signet, regtest or simnet")
 	var dbPass  = flag.String("dbpass", "", "passphrase for the encrypted SQLCipher database (empty = unencrypted)")
 	var check   = flag.Bool("check", false, "initialise the wallet and print its address without opening the GUI")
 	var i2pSAM  = flag.String("i2psam", i2p.DefaultSAM, "SAM bridge address (host:port) of the local I2P router, such as i2pd, used while I2P is on in Settings")
@@ -77,7 +77,7 @@ func defaultDataDir() string {
 func openWallet(dataDir, network, dbPass string) (*storage.Store, *wallet.Wallet, error) {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return nil, nil, err }
-	var store, serr = storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
+	var store, serr = storage.Open(filepath.Join(dataDir, storage.FileName(net)), dbPass)
 	if serr != nil { return nil, nil, serr }
 	var fail = func(err error) (*storage.Store, *wallet.Wallet, error) {
 		_ = store.Close()

@@ -111,7 +111,7 @@ type gui struct {
 func newGUI(opts Options, w fyne.Window) (*gui, error) {
 	var net, err = wallet.ParamsForNetwork(opts.Network)
 	if err != nil { return nil, err }
-	var store, serr = storage.Open(filepath.Join(opts.DataDir, "bitfyn.db"), opts.DBPass)
+	var store, serr = storage.Open(filepath.Join(opts.DataDir, storage.FileName(net)), opts.DBPass)
 	if serr != nil { return nil, serr }
 	var fail = func(err error) (*gui, error) {
 		_ = store.Close()

@@ -23,7 +23,7 @@ import "bitfyn/internal/wallet"
 func main() {
 	var home, _ = os.UserHomeDir()
 	var dataDir = flag.String("datadir", filepath.Join(home, ".bitfyn"), "directory of the wallet database")
-	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, regtest or simnet")
+	var network = flag.String("net", "mainnet", "bitcoin network: mainnet, testnet, testnet4, signet, regtest or simnet")
 	var dbPass = flag.String("dbpass", "", "passphrase of the encrypted database")
 	var coins = flag.String("coins", "", "comma separated coins to spend, as txid:index")
 	var to = flag.String("to", "", "address to pay")
@@ -43,7 +43,7 @@ func main() {
 func run(dataDir, network, dbPass string, outpoints []string, to string, feeRate int64) error {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return err }
-	var store, serr = storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
+	var store, serr = storage.Open(filepath.Join(dataDir, storage.FileName(net)), dbPass)
 	if serr != nil { return serr }
 	defer store.Close()
 	var meta, merr = store.Meta()

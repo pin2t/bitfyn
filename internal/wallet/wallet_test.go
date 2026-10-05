@@ -107,6 +107,8 @@ func TestParamsForNetwork(t *testing.T) {
 		"mainnet": "mainnet",
 		"bitcoin": "mainnet",
 		"testnet": "testnet3",
+		"testnet4": "testnet4",
+		"signet":  "signet",
 		"regtest": "regtest",
 		"simnet":  "simnet",
 	}

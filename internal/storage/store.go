@@ -13,6 +13,7 @@ import "os"
 import "path/filepath"
 import "strings"
 import "time"
+import "github.com/btcsuite/btcd/chaincfg"
 import _ "github.com/mutecomm/go-sqlcipher/v4"
 
 // ErrNoWallet is returned when the database exists but holds no wallet yet.
@@ -100,6 +101,21 @@ type Meta struct {
 	Network   string
 	CreatedAt int64
 	NextIndex uint32
+}
+
+// FileName is the name of the wallet database of the network in the data
+// directory: bitfyn.db for mainnet, and bitfyn-<network>.db for the others,
+// such as bitfyn-testnet.db, so the wallets of different networks never
+// share a file.
+func FileName(params *chaincfg.Params) string {
+	switch params.Net {
+	case chaincfg.MainNetParams.Net:
+		return "bitfyn.db"
+	case chaincfg.TestNet3Params.Net:
+		return "bitfyn-testnet.db"
+	default:
+		return "bitfyn-" + params.Name + ".db"
+	}
 }
 
 // Store wraps the wallet database.

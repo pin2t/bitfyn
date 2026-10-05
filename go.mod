@@ -4,7 +4,7 @@ go 1.25.6
 
 require (
 	fyne.io/fyne/v2 v2.8.1
-	github.com/btcsuite/btcd v0.24.2
+	github.com/btcsuite/btcd v0.25.0
 	github.com/btcsuite/btcd/btcutil v1.2.0
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
@@ -21,6 +21,7 @@ require (
 	github.com/aead/siphash v1.0.1 // indirect
 	github.com/anthonynsimon/bild v0.14.0 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5 // indirect
+	github.com/btcsuite/btcd/v2transport v1.0.1 // indirect
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f // indirect
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
