@@ -48,7 +48,7 @@ Flags:
 
 | flag       | default      | meaning                                          |
 |------------|--------------|--------------------------------------------------|
-| `-datadir` | `~/.bitfyn`  | directory holding `bitfyn.db`                    |
+| `-datadir` | `~/.bitfyn`  | directory holding the wallet database: `bitfyn.db` on mainnet, `bitfyn-<net>.db` (e.g. `bitfyn-testnet.db`) on other networks |
 | `-net`     | `mainnet`    | `mainnet`, `testnet`, `regtest` or `simnet`      |
 | `-dbpass`  | *(empty)*    | SQLCipher passphrase; empty = unencrypted DB     |
 | `-check`   | `false`      | init wallet, print address, exit (no GUI)        |

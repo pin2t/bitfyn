@@ -43,7 +43,7 @@ func main() {
 func run(dataDir, network, dbPass string, outpoints []string, to string, feeRate int64) error {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return err }
-	var store, serr = storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
+	var store, serr = storage.Open(filepath.Join(dataDir, storage.FileName(net)), dbPass)
 	if serr != nil { return serr }
 	defer store.Close()
 	var meta, merr = store.Meta()

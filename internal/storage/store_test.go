@@ -4,6 +4,7 @@ import "errors"
 import "os"
 import "path/filepath"
 import "testing"
+import "github.com/btcsuite/btcd/chaincfg"
 
 // TestPlainLifecycle exercises the unencrypted database: wallet creation,
 // metadata, idempotent address inserts, index updates and persistence across
@@ -90,5 +91,24 @@ func TestEncryptedLifecycle(t *testing.T) {
 	s2.Close()
 	if _, err := Open(path, "wrong"); err == nil {
 		t.Fatal("Open with wrong passphrase succeeded, want error")
+	}
+}
+
+// TestFileName checks the database name of each network: mainnet keeps
+// bitfyn.db, the others get their own file.
+func TestFileName(t *testing.T) {
+	var cases = []struct {
+		params *chaincfg.Params
+		want   string
+	}{
+		{&chaincfg.MainNetParams, "bitfyn.db"},
+		{&chaincfg.TestNet3Params, "bitfyn-testnet.db"},
+		{&chaincfg.RegressionNetParams, "bitfyn-regtest.db"},
+		{&chaincfg.SimNetParams, "bitfyn-simnet.db"},
+	}
+	for _, c := range cases {
+		if got := FileName(c.params); got != c.want {
+			t.Errorf("FileName(%s) = %q, want %q", c.params.Name, got, c.want)
+		}
 	}
 }

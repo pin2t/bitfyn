@@ -77,7 +77,7 @@ func defaultDataDir() string {
 func openWallet(dataDir, network, dbPass string) (*storage.Store, *wallet.Wallet, error) {
 	var net, err = wallet.ParamsForNetwork(network)
 	if err != nil { return nil, nil, err }
-	var store, serr = storage.Open(filepath.Join(dataDir, "bitfyn.db"), dbPass)
+	var store, serr = storage.Open(filepath.Join(dataDir, storage.FileName(net)), dbPass)
 	if serr != nil { return nil, nil, serr }
 	var fail = func(err error) (*storage.Store, *wallet.Wallet, error) {
 		_ = store.Close()
