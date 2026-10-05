@@ -183,8 +183,10 @@ func ParamsForNetwork(network string) (*chaincfg.Params, error) {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "mainnet", "bitcoin":  return &chaincfg.MainNetParams, nil
 	case "testnet", "testnet3": return &chaincfg.TestNet3Params, nil
+	case "testnet4":            return &chaincfg.TestNet4Params, nil
+	case "signet":              return &chaincfg.SigNetParams, nil
 	case "regtest":             return &chaincfg.RegressionNetParams, nil
 	case "simnet":              return &chaincfg.SimNetParams, nil
-	default:               		return nil, fmt.Errorf("unknown network %q (want mainnet, testnet, regtest or simnet)", network)
+	default:               		return nil, fmt.Errorf("unknown network %q (want mainnet, testnet, testnet4, signet, regtest or simnet)", network)
 	}
 }

@@ -178,6 +178,16 @@ func Seeds(params *chaincfg.Params) []PeerAddr {
 			{"testnet-seed.bitcoin.sprovoost.nl", 18333},
 			{"testnet-seed.bitcoin.wiz.biz", 18333},
 		}
+	case chaincfg.TestNet4Params.Net:
+		seeds = []seedHost{
+			{"seed.testnet4.bitcoin.sprovoost.nl", 48333},
+			{"seed.testnet4.wiz.biz", 48333},
+		}
+	case chaincfg.SigNetParams.Net:
+		seeds = []seedHost{
+			{"seed.signet.bitcoin.sprovoost.nl", 38333},
+			{"seed.signet.achownodes.xyz", 38333},
+		}
 	default:
 		return nil
 	}

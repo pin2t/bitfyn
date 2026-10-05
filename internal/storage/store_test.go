@@ -103,6 +103,8 @@ func TestFileName(t *testing.T) {
 	}{
 		{&chaincfg.MainNetParams, "bitfyn.db"},
 		{&chaincfg.TestNet3Params, "bitfyn-testnet.db"},
+		{&chaincfg.TestNet4Params, "bitfyn-testnet4.db"},
+		{&chaincfg.SigNetParams, "bitfyn-signet.db"},
 		{&chaincfg.RegressionNetParams, "bitfyn-regtest.db"},
 		{&chaincfg.SimNetParams, "bitfyn-simnet.db"},
 	}

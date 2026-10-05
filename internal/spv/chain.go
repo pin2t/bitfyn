@@ -22,8 +22,9 @@ const retargetInterval = 2016
 // retargetTimespan is the expected time for a full difficulty period.
 const retargetTimespan = retargetInterval * 10 * 60
 
-// testnetMinGap is the delay after which testnet allows a min-difficulty block.
-const testnetMinGap = 20 * 60
+// maxTimeWarp is how far before its parent the first block of a difficulty
+// period may be dated on networks enforcing BIP94, such as testnet4.
+const maxTimeWarp = 10 * time.Minute
 
 // Header is a validated block header at a known height.
 type Header struct {
@@ -167,29 +168,52 @@ func (c *Chain) medianTime() (time.Time, error) {
 	return time.Unix(times[len(times)/2], 0), nil
 }
 
+// checkDifficulty checks the bits of the header against the difficulty
+// rules of the network. On testnet3 and testnet4 a block inside a difficulty
+// period may have the minimum difficulty when it comes more than 20 minutes
+// after its parent, or when the period's real difficulty is the minimum
+// anyway. Testnet4 also enforces BIP94: a period's first block may
+// not be dated more than 10 minutes before its parent, and its difficulty is
+// scaled from the first block of the previous period instead of the last.
 func (c *Chain) checkDifficulty(hdr *wire.BlockHeader, height int32) error {
 	switch c.params.Net {
 	case chaincfg.RegressionNetParams.Net, chaincfg.SimNetParams.Net:
 		return nil
-	case chaincfg.TestNet3Params.Net:
-		if hdr.Bits == c.params.PowLimitBits {
-			var prev = c.headers[height-1]
-			if hdr.Timestamp.Unix()-prev.Timestamp.Unix() > testnetMinGap {
-				return nil
-			}
-			return fmt.Errorf("min-difficulty bits %x without the required %d-second gap", hdr.Bits, testnetMinGap)
-		}
 	}
-	if height%retargetInterval == 0 {
-		var first = c.headers[height-retargetInterval].Timestamp
-		var parent = c.headers[height-1]
-		var want, err = nextRetargetBits(first, parent.Timestamp, parent.Bits, c.params)
-		if err != nil { return err }
-		if hdr.Bits != want {
-			return fmt.Errorf("bits %x at difficulty retarget, want %x", hdr.Bits, want)
+	var parent = c.headers[height-1]
+	var retarget = height%retargetInterval == 0
+	if c.params.ReduceMinDifficulty && !retarget && hdr.Bits == c.params.PowLimitBits {
+		if hdr.Timestamp.Sub(parent.Timestamp) > c.params.MinDiffReductionTime {
+			return nil
 		}
+		if c.lastRealBits(height-1) == c.params.PowLimitBits { return nil }
+		return fmt.Errorf("min-difficulty bits %x without the required %s gap", hdr.Bits, c.params.MinDiffReductionTime)
+	}
+	if !retarget { return nil }
+	var first = c.headers[height-retargetInterval]
+	var oldBits = parent.Bits
+	if c.params.EnforceBIP94 {
+		if hdr.Timestamp.Before(parent.Timestamp.Add(-maxTimeWarp)) {
+			return fmt.Errorf("timestamp %s at difficulty retarget is more than %s before parent %s", hdr.Timestamp, maxTimeWarp, parent.Timestamp)
+		}
+		oldBits = first.Bits
+	}
+	var want, err = nextRetargetBits(first.Timestamp, parent.Timestamp, oldBits, c.params)
+	if err != nil { return err }
+	if hdr.Bits != want {
+		return fmt.Errorf("bits %x at difficulty retarget, want %x", hdr.Bits, want)
 	}
 	return nil
+}
+
+// lastRealBits returns the bits of the latest block at or below the height
+// that is not a min-difficulty exception: the difficulty of the period, as
+// Bitcoin Core finds it on the networks allowing such blocks.
+func (c *Chain) lastRealBits(height int32) uint32 {
+	for height > 0 && height%retargetInterval != 0 && c.headers[height].Bits == c.params.PowLimitBits {
+		height--
+	}
+	return c.headers[height].Bits
 }
 
 // checkPoW verifies the header hash meets the difficulty target encoded in

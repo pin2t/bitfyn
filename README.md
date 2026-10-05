@@ -37,6 +37,7 @@ so no system SQLCipher/OpenSSL is needed.
 
 ```sh
 ./bitfyn -net testnet                       # GUI, default datadir ~/.bitfyn
+./bitfyn -net signet                        # GUI on signet, wallet in ~/.bitfyn/bitfyn-signet.db
 ./bitfyn -datadir ./data -net mainnet       # custom datadir
 ./bitfyn -dbpass 'your-passphrase'          # encrypted wallet database
 ./bitfyn -check                             # headless smoke check, prints address + writes QR png
@@ -49,7 +50,7 @@ Flags:
 | flag       | default      | meaning                                          |
 |------------|--------------|--------------------------------------------------|
 | `-datadir` | `~/.bitfyn`  | directory holding the wallet database: `bitfyn.db` on mainnet, `bitfyn-<net>.db` (e.g. `bitfyn-testnet.db`) on other networks |
-| `-net`     | `mainnet`    | `mainnet`, `testnet`, `regtest` or `simnet`      |
+| `-net`     | `mainnet`    | `mainnet`, `testnet` (testnet3), `testnet4`, `signet`, `regtest` or `simnet` |
 | `-dbpass`  | *(empty)*    | SQLCipher passphrase; empty = unencrypted DB     |
 | `-check`   | `false`      | init wallet, print address, exit (no GUI)        |
 | `-sync`    | `false`      | headless SPV sync: headers + BIP158 filters + match |
